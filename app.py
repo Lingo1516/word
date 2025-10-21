@@ -17,7 +17,10 @@ def fetch_academic_papers(keyword):
     # 發送 GET 請求，並添加 headers
     response = session.get(target_url, headers=headers)
     response.encoding = 'utf-8'
-    
+
+    # 打印出網頁的原始 HTML 內容來進行調試
+    st.write(response.text)  # 顯示 HTML 以查看是否正確返回
+
     # 解析 HTML 內容
     soup = BeautifulSoup(response.text, 'html.parser')
 
