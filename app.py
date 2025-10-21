@@ -53,11 +53,10 @@ def fetch_google_scholar(keyword):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", # 更新 User Agent
                 java_script_enabled=True,
                 locale="zh-TW",
                 timezone_id="Asia/Taipei",
-                # 新增更詳細的瀏覽器指紋
                 viewport={'width': 1920, 'height': 1080},
                 screen={'width': 1920, 'height': 1080},
                 color_scheme='dark',
@@ -66,24 +65,29 @@ def fetch_google_scholar(keyword):
             
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             
-            # --- 終極策略：智慧型等待與 CAPTCHA 偵測 ---
+            # --- 最終策略：兩段式尋找 ---
             # 1. 檢查是否一開始就被 CAPTCHA 擋住
             if page.locator('iframe[src*="recaptcha"]').count() > 0:
                 captcha_detected = True
                 raise PlaywrightTimeoutError("偵測到 CAPTCHA，無法繼續。")
 
-            # 2. 使用 networkidle 智慧型等待，確保頁面完全載入
-            page.wait_for_load_state('networkidle', timeout=30000)
-            time.sleep(random.uniform(1, 2)) # 等待後再稍作停留
+            # 2. 明確等待搜尋結果的「外框」出現
+            results_container_selector = 'div#gs_res_ccl_mid'
+            page.wait_for_selector(results_container_selector, state='visible', timeout=30000)
+            time.sleep(random.uniform(1, 2))
 
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
-            paper_blocks = soup.find_all('div', class_='gs_r gs_or gs_scl')
+            # 3. 先找到「外框」
+            results_container = soup.find('div', id='gs_res_ccl_mid')
+            if not results_container:
+                 raise PlaywrightTimeoutError("頁面已載入，但找不到主要的搜尋結果容器 'gs_res_ccl_mid'。")
 
-            # 如果找不到結果，也當作是被擋了，拍張照看看
+            # 4. 在「外框」內尋找每一筆文獻
+            paper_blocks = results_container.find_all('div', class_='gs_scl')
             if not paper_blocks:
-                 raise PlaywrightTimeoutError("頁面已載入，但找不到搜尋結果區塊。")
+                 raise PlaywrightTimeoutError("在結果容器中找到了外框，但裡面沒有任何文獻項目 ('gs_scl')。")
 
             for block in paper_blocks:
                 title_element = block.find('h3', class_='gs_rt')
@@ -100,7 +104,7 @@ def fetch_google_scholar(keyword):
                     })
             
             browser.close()
-            return results, None, False
+            return results, None, None
 
     except PlaywrightTimeoutError as e:
         error_message = f"頁面加載超時或結構不符：{e}"
