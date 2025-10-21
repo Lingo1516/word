@@ -55,18 +55,35 @@ def fetch_academic_papers(keyword):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            
+            # --- 新增：模擬真實使用者瀏覽器 ---
+            # 設定一個常見的 User-Agent，降低被網站偵測為爬蟲的機率
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
+            )
+            page = context.new_page()
+            # --- 新增結束 ---
+
             target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
-            page.goto(target_url, timeout=60000)
+            
+            # 前往目標頁面，並等待頁面網路活動基本停止，這對動態載入的網站更穩定
+            page.goto(target_url, timeout=60000, wait_until='networkidle')
+            
+            # 等待搜尋結果的容器元素出現
             page.wait_for_selector('div.search_result_list', timeout=30000)
+
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             titles = soup.find_all('h3', class_='title')
             titles_text = [title.text.strip() for title in titles]
+
+            # 關閉瀏覽器上下文和瀏覽器本身
+            context.close()
             browser.close()
+            
             return titles_text
     except PlaywrightTimeoutError:
-        st.error("頁面加載超時，可能是網路問題或網站結構已更改。請稍後再試。")
+        st.error("頁面加載超時。這很可能是因為目標網站啟動了反爬蟲機制，或是網站結構已更改。請稍後再試。")
         return []
     except Exception as e:
         st.error(f"抓取資料時發生未預期的錯誤：{e}")
