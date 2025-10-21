@@ -3,6 +3,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 from bs4 import BeautifulSoup
 import subprocess
 import sys
+import time
 
 # --- 自動安裝 Playwright 瀏覽器的設定區塊 (已修正) ---
 
@@ -55,21 +56,31 @@ def fetch_academic_papers(keyword):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            
-            # --- 新增：模擬真實使用者瀏覽器 ---
-            # 設定一個常見的 User-Agent，降低被網站偵測為爬蟲的機率
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
             )
             page = context.new_page()
-            # --- 新增結束 ---
 
             target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
             
-            # 前往目標頁面，並等待頁面網路活動基本停止，這對動態載入的網站更穩定
-            page.goto(target_url, timeout=60000, wait_until='networkidle')
+            # 前往目標頁面，使用 domcontentloaded 加快初步載入速度
+            page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             
-            # 等待搜尋結果的容器元素出現
+            # --- 新增：處理 Cookie 同意按鈕 ---
+            # 給予頁面短暫時間渲染，然後嘗試點擊 Cookie 按鈕
+            try:
+                # 等待「我同意」按鈕出現（最多等5秒），如果出現就點擊它
+                cookie_button_selector = 'a.cookie_btn:has-text("我同意")'
+                page.locator(cookie_button_selector).click(timeout=5000)
+                st.toast("已自動點擊 Cookie 同意按鈕", icon="🍪")
+                # 點擊後多等待一秒，確保頁面反應
+                time.sleep(1)
+            except PlaywrightTimeoutError:
+                # 如果5秒內沒找到按鈕，代表它可能不存在，直接忽略此錯誤繼續執行
+                pass 
+            # --- 新增結束 ---
+            
+            # 現在才等待我們真正需要的搜尋結果容器元素出現
             page.wait_for_selector('div.search_result_list', timeout=30000)
 
             html = page.content()
@@ -77,7 +88,6 @@ def fetch_academic_papers(keyword):
             titles = soup.find_all('h3', class_='title')
             titles_text = [title.text.strip() for title in titles]
 
-            # 關閉瀏覽器上下文和瀏覽器本身
             context.close()
             browser.close()
             
