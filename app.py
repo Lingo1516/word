@@ -44,36 +44,46 @@ def fetch_google_scholar(keyword):
     使用 Playwright 前往 Google 學術搜尋，抓取文獻標題和連結。
     """
     results = []
-    # 將關鍵字進行 URL 編碼，避免特殊字元問題
     encoded_keyword = urllib.parse.quote(keyword)
-    # 新增 hl=zh-TW 參數來指定繁體中文介面
     target_url = f'https://scholar.google.com/scholar?hl=zh-TW&q={encoded_keyword}'
     page = None
+    captcha_detected = False
 
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
                 java_script_enabled=True,
-                # 模擬台灣時區和語言
                 locale="zh-TW",
-                timezone_id="Asia/Taipei"
+                timezone_id="Asia/Taipei",
+                # 新增更詳細的瀏覽器指紋
+                viewport={'width': 1920, 'height': 1080},
+                screen={'width': 1920, 'height': 1080},
+                color_scheme='dark',
             )
             page = context.new_page()
             
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             
-            # 隨機延遲 1 到 3 秒，模擬真人行為
-            time.sleep(random.uniform(1, 3))
+            # --- 終極策略：智慧型等待與 CAPTCHA 偵測 ---
+            # 1. 檢查是否一開始就被 CAPTCHA 擋住
+            if page.locator('iframe[src*="recaptcha"]').count() > 0:
+                captcha_detected = True
+                raise PlaywrightTimeoutError("偵測到 CAPTCHA，無法繼續。")
 
-            # 等待搜尋結果的容器出現
-            page.wait_for_selector('#gs_res_ccl_mid', timeout=30000)
+            # 2. 使用 networkidle 智慧型等待，確保頁面完全載入
+            page.wait_for_load_state('networkidle', timeout=30000)
+            time.sleep(random.uniform(1, 2)) # 等待後再稍作停留
 
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
             paper_blocks = soup.find_all('div', class_='gs_r gs_or gs_scl')
+
+            # 如果找不到結果，也當作是被擋了，拍張照看看
+            if not paper_blocks:
+                 raise PlaywrightTimeoutError("頁面已載入，但找不到搜尋結果區塊。")
 
             for block in paper_blocks:
                 title_element = block.find('h3', class_='gs_rt')
@@ -86,27 +96,26 @@ def fetch_google_scholar(keyword):
                     snippet = snippet_element.text if snippet_element else ""
 
                     results.append({
-                        "title": title,
-                        "link": link,
-                        "author": author,
-                        "snippet": snippet
+                        "title": title, "link": link, "author": author, "snippet": snippet
                     })
             
             browser.close()
-            return results, None # 成功時回傳結果和空的截圖
+            return results, None, False
 
-    except PlaywrightTimeoutError:
-        st.error("頁面加載超時。Google 可能顯示了 CAPTCHA 驗證，或是暫時阻擋了請求。")
+    except PlaywrightTimeoutError as e:
+        error_message = f"頁面加載超時或結構不符：{e}"
+        if captcha_detected:
+            error_message = "很抱歉，Google 偵測到自動化行為並顯示了 CAPTCHA (我不是機器人) 驗證，因此無法繼續抓取。"
+        
         screenshot_bytes = None
         if page:
             try:
                 screenshot_bytes = page.screenshot()
             except Exception:
-                pass # 截圖失敗也沒關係
-        return [], screenshot_bytes # 失敗時回傳空結果和截圖
+                pass
+        return [], screenshot_bytes, error_message
     except Exception as e:
-        st.error(f"抓取資料時發生未預期的錯誤：{e}")
-        return [], None
+        return [], None, f"抓取資料時發生未預期的錯誤：{e}"
 
 # Streamlit 應用主函數
 def main():
@@ -119,7 +128,7 @@ def main():
     if st.button('開始搜尋', type="primary"):
         if keyword:
             with st.spinner(f'正在 Google 學術搜尋中搜尋「{keyword}」...'):
-                papers, screenshot = fetch_google_scholar(keyword)
+                papers, screenshot, error = fetch_google_scholar(keyword)
             
             if papers:
                 st.success(f"成功抓取到 {len(papers)} 筆文獻結果：")
@@ -132,9 +141,12 @@ def main():
             else:
                 st.warning("未能抓取到任何文獻，請嘗試更換關鍵字。")
 
+            if error:
+                st.error(error) # 顯示更詳細的錯誤訊息
+
             if screenshot:
                 st.subheader("🕵️‍♂️ 除錯資訊：案發現場截圖")
-                st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面，請檢查是否有 CAPTCHA。")
+                st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面。")
         else:
             st.warning("請先輸入要搜尋的關鍵字。")
 
