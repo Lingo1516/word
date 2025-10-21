@@ -88,16 +88,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
-
-### **操作說明**
-
-您只需要做一件事：
-
-1.  **更新 `app.py`**：將您 GitHub 上的 `app.py` 內容，完全替換成上面這個「最終修正版」。
-2.  **`requirements.txt` 維持不變**，依然是：
-    ```
-    streamlit
-    scholarly
-    
 
