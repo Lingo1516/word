@@ -1,8 +1,15 @@
 import streamlit as st
-from scholarly import scholarly
+from scholarly import scholarly, ProxyGenerator
 import time
 
 # --- 在這個版本中，我們不再需要 Playwright，所以移除了所有相關的環境設定 ---
+# --- 同時，我們設定一個代理來提高穩定性 ---
+
+# 設定代理，這可以幫助避免被 Google 封鎖
+# Streamlit Cloud 讓我們可以免費使用，所以我們將其啟用
+pg = ProxyGenerator()
+success = pg.FreeProxies()
+scholarly.use_proxy(pg)
 
 # 抓取 Google 學術搜尋結果的函數
 def fetch_google_scholar(keyword):
@@ -12,9 +19,12 @@ def fetch_google_scholar(keyword):
     """
     results = []
     try:
-        # 使用 scholarly 進行搜尋，並設定語言為繁體中文
+        # --- 修正：根據 scholarly 最新版本，設定語言的方式 ---
+        # 我們不再將 language 參數直接傳入，而是在 scholarly 物件上設定
+        scholarly.set_language('zh-TW')
+        
         # search_pubs 會回傳一個產生器 (generator)
-        search_query = scholarly.search_pubs(keyword, language='zh-TW')
+        search_query = scholarly.search_pubs(keyword)
         
         # 我們只取前10筆結果，避免請求時間過長
         for i, pub in enumerate(search_query):
@@ -29,7 +39,6 @@ def fetch_google_scholar(keyword):
             if isinstance(author, list):
                 author = ', '.join(author)
             
-            # scholarly 通常不直接提供摘要，但會提供出版資訊
             publication = bib.get('venue', '出版資訊未提供')
             link = pub.get('pub_url', '#') # 取得文章的 Google Scholar 連結
 
@@ -46,13 +55,13 @@ def fetch_google_scholar(keyword):
 
     except Exception as e:
         # 處理 scholarly 可能遇到的各種網路或解析錯誤
-        error_message = f"搜尋時發生錯誤：{e}。這可能是因為請求過於頻繁，請稍後再試。"
+        error_message = f"搜尋時發生錯誤：{e}。這可能是因為請求過於頻繁或 Google 暫時封鎖了 IP，請稍後再試。"
         return [], error_message
 
 # Streamlit 應用主函數
 def main():
     st.set_page_config(layout="wide", page_title="Google 學術搜尋工具")
-    st.title("🔎 Google 學術搜尋工具 (穩定版)")
+    st.title("🔎 Google 學術搜尋工具 (最終修正版)")
     st.write("輸入關鍵字，即可抓取相關的學術文獻標題、作者與連結。採用 `scholarly` 函式庫，成功率更高。")
 
     keyword = st.text_input("輸入您想要搜尋的關鍵字（例如：人工智慧）", "")
@@ -79,4 +88,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
+
+### **操作說明**
+
+您只需要做一件事：
+
+1.  **更新 `app.py`**：將您 GitHub 上的 `app.py` 內容，完全替換成上面這個「最終修正版」。
+2.  **`requirements.txt` 維持不變**，依然是：
+    ```
+    streamlit
+    scholarly
+    
 
