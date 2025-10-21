@@ -41,64 +41,62 @@ def fetch_academic_papers(keyword):
     使用 Playwright 前往華藝線上圖書館，抓取文獻標題。
     如果失敗，會回傳螢幕截圖和 HTML 原始碼以供除錯。
     """
-    screenshot_bytes = None
-    html_content = ""
+    page = None # 將 page 變數提到 try 的外面
+    context = None
+    browser = None
     
     try:
         with sync_playwright() as p:
+            st.info("1. 正在啟動瀏覽器...")
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-                viewport={'width': 1280, 'height': 800} # 設定視窗大小
+                viewport={'width': 1280, 'height': 800}
             )
             page = context.new_page()
 
-            # --- 變更：改用更簡單的標準搜尋頁面 ---
-            # 有時候進階搜尋頁面會有更強的反爬蟲機制
             target_url = f'https://www.airitilibrary.com/search?q={keyword}'
-            
+            st.info(f"2. 正在前往目標網址：{target_url}")
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             
-            # --- 處理 Cookie 同意按鈕 ---
+            st.info("3. 正在尋找並點擊 Cookie 同意按鈕...")
             try:
                 cookie_button_selector = 'a.cookie_btn:has-text("我同意")'
                 page.locator(cookie_button_selector).click(timeout=10000)
                 st.toast("已自動點擊 Cookie 同意按鈕", icon="🍪")
-                time.sleep(2) # 點擊後等待一下
+                time.sleep(2)
             except PlaywrightTimeoutError:
+                st.info("找不到 Cookie 按鈕，可能無需點擊。")
                 pass 
             
-            # 等待搜尋結果容器元素出現
+            st.info("4. 正在等待搜尋結果載入...")
             page.wait_for_selector('div.search_result_list', timeout=30000)
+            st.info("5. 成功找到搜尋結果！正在解析內容...")
 
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             titles = soup.find_all('h3', class_='title')
             titles_text = [title.text.strip() for title in titles]
-
-            context.close()
-            browser.close()
             
             return titles_text, None, None # 成功時回傳標題
             
-    except PlaywrightTimeoutError as e:
+    except PlaywrightTimeoutError:
         st.error("頁面加載超時，已擷取當前畫面以供除錯。")
-        # --- 新增：錯誤時擷取畫面和原始碼 ---
+        screenshot_bytes = None
+        html_content = ""
         try:
-            screenshot_bytes = page.screenshot()
-            html_content = page.content()
+            if page: # 確保 page 物件存在
+                screenshot_bytes = page.screenshot()
+                html_content = page.content()
         except Exception as screenshot_error:
             st.warning(f"擷取除錯資訊時發生額外錯誤: {screenshot_error}")
-        # 即使出錯也要確保瀏覽器關閉
-        if 'browser' in locals() and browser.is_connected():
-            browser.close()
         return [], screenshot_bytes, html_content # 失敗時回傳除錯資訊
 
     except Exception as e:
         st.error(f"抓取資料時發生未預期的錯誤：{e}")
-        if 'browser' in locals() and browser.is_connected():
-            browser.close()
         return [], None, None
+    
+    # with 區塊結束後，playwright 會自動清理 browser, context, page，無需手動關閉
 
 # Streamlit 應用主函數
 def main():
@@ -109,8 +107,9 @@ def main():
 
     if st.button('抓取學術文獻'):
         if keyword:
-            with st.spinner(f'正在搜尋「{keyword}」的相關文獻...'):
-                titles, screenshot, html = fetch_academic_papers(keyword)
+            # 清空之前的除錯資訊
+            titles, screenshot, html = [], None, None 
+            titles, screenshot, html = fetch_academic_papers(keyword)
             
             if titles:
                 st.success(f"成功抓取到 {len(titles)} 筆文獻標題：")
@@ -120,7 +119,7 @@ def main():
             else:
                 st.warning("未能抓取到任何文獻。")
 
-            # --- 新增：如果收到除錯資訊，就顯示出來 ---
+            # 如果收到除錯資訊，就顯示出來
             if screenshot:
                 st.subheader("🕵️‍♂️ 除錯資訊：案發現場截圖")
                 st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面")
