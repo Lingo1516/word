@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 
 # 爬取華藝線上圖書館文獻標題的函數
 def fetch_academic_papers():
-    session = requests.Session()
+    session = requests.Session()  # 創建一個會話
 
     # 華藝線上圖書館的文獻搜尋頁面
     target_url = 'https://www.airitilibrary.com/advsearch'
