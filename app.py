@@ -2,18 +2,9 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# 設置代理（如果需要）
-proxies = {
-    'http': 'http://59.120.67.238:8080',  # 這是您的校園網代理地址和端口
-    'https': 'http://59.120.67.238:8080',  # 如果需要，請更改代理端口
-}
-
 # 爬取華藝線上圖書館文獻標題的函數
 def fetch_academic_papers():
     session = requests.Session()
-    
-    # 設置代理
-    session.proxies.update(proxies)
 
     # 華藝線上圖書館的文獻搜尋頁面
     target_url = 'https://www.airitilibrary.com/advsearch'
