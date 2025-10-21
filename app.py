@@ -13,10 +13,8 @@ def fetch_google_scholar(keyword):
     """
     results = []
     try:
-        # --- 修正：根據 scholarly 最新版本，設定語言的方式 ---
-        scholarly.set_language('zh-TW')
-        
         # search_pubs 會回傳一個產生器 (generator)
+        # 語言已在 URL 中設定 (hl=zh-TW)，此處不需額外設定
         search_query = scholarly.search_pubs(keyword)
         
         # 我們只取前10筆結果，避免請求時間過長
