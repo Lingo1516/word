@@ -55,5 +55,6 @@ def main():
         else:
             st.write("請填寫帳號和密碼")
 
-if __name__ == "__main__
-
+# 確保在直接運行此程式時，執行 main 函數
+if __name__ == "__main__":
+    main()
