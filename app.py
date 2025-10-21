@@ -2,12 +2,12 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# 爬取華藝線上圖書館文獻標題的函數
-def fetch_academic_papers():
+# 根據關鍵字抓取文獻的函數
+def fetch_academic_papers(keyword):
     session = requests.Session()  # 創建一個會話
 
-    # 華藝線上圖書館的文獻搜尋頁面
-    target_url = 'https://www.airitilibrary.com/advsearch'
+    # 華藝線上圖書館的搜尋頁面，根據關鍵字搜尋
+    target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
     
     # 發送 GET 請求
     response = session.get(target_url)
@@ -28,18 +28,24 @@ def main():
     # 顯示標題
     st.title("華藝線上圖書館文獻爬取")
 
+    # 讓用戶輸入搜尋關鍵字
+    keyword = st.text_input("輸入您想要搜尋的關鍵字（例如：策略管理）")
+
     # 抓取文獻資料的按鈕
     if st.button('抓取學術文獻'):
-        # 呼叫爬蟲函數抓取文獻
-        titles = fetch_academic_papers()
-        
-        # 顯示結果
-        if titles:
-            st.write("爬取到的文獻標題：")
-            for title in titles:
-                st.write(title)
+        if keyword:
+            # 呼叫爬蟲函數抓取文獻
+            titles = fetch_academic_papers(keyword)
+            
+            # 顯示結果
+            if titles:
+                st.write("爬取到的文獻標題：")
+                for title in titles:
+                    st.write(title)
+            else:
+                st.write("未能抓取到文獻，請檢查關鍵字或重新嘗試。")
         else:
-            st.write("未能抓取到文獻，請檢查網絡連接或重新嘗試。")
+            st.write("請輸入搜尋的關鍵字")
 
 # 確保在直接運行此程式時，執行 main 函數
 if __name__ == "__main__":
