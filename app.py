@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 import subprocess
 import sys
 import urllib.parse
+import time
+import random
 
 # --- 雲端環境設定區塊 ---
 # 這個區塊確保在 Streamlit Cloud 上能自動安裝並設定好 Playwright
@@ -44,18 +46,26 @@ def fetch_google_scholar(keyword):
     results = []
     # 將關鍵字進行 URL 編碼，避免特殊字元問題
     encoded_keyword = urllib.parse.quote(keyword)
-    target_url = f'https://scholar.google.com/scholar?q={encoded_keyword}'
+    # 新增 hl=zh-TW 參數來指定繁體中文介面
+    target_url = f'https://scholar.google.com/scholar?hl=zh-TW&q={encoded_keyword}'
+    page = None
 
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-                java_script_enabled=True # 確保 JavaScript 正常執行
+                java_script_enabled=True,
+                # 模擬台灣時區和語言
+                locale="zh-TW",
+                timezone_id="Asia/Taipei"
             )
             page = context.new_page()
             
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
+            
+            # 隨機延遲 1 到 3 秒，模擬真人行為
+            time.sleep(random.uniform(1, 3))
 
             # 等待搜尋結果的容器出現
             page.wait_for_selector('#gs_res_ccl_mid', timeout=30000)
@@ -63,7 +73,6 @@ def fetch_google_scholar(keyword):
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # 找到所有的搜尋結果項目
             paper_blocks = soup.find_all('div', class_='gs_r gs_or gs_scl')
 
             for block in paper_blocks:
@@ -71,11 +80,8 @@ def fetch_google_scholar(keyword):
                 if title_element and title_element.a:
                     title = title_element.a.text
                     link = title_element.a['href']
-                    
-                    # 嘗試抓取作者和簡介
                     author_element = block.find('div', class_='gs_a')
                     author = author_element.text if author_element else "作者資訊未提供"
-                    
                     snippet_element = block.find('div', class_='gs_rs')
                     snippet = snippet_element.text if snippet_element else ""
 
@@ -87,14 +93,20 @@ def fetch_google_scholar(keyword):
                     })
             
             browser.close()
-            return results
+            return results, None # 成功時回傳結果和空的截圖
 
     except PlaywrightTimeoutError:
-        st.error("頁面加載超時。Google 可能暫時阻擋了請求，請稍後再試。")
-        return []
+        st.error("頁面加載超時。Google 可能顯示了 CAPTCHA 驗證，或是暫時阻擋了請求。")
+        screenshot_bytes = None
+        if page:
+            try:
+                screenshot_bytes = page.screenshot()
+            except Exception:
+                pass # 截圖失敗也沒關係
+        return [], screenshot_bytes # 失敗時回傳空結果和截圖
     except Exception as e:
         st.error(f"抓取資料時發生未預期的錯誤：{e}")
-        return []
+        return [], None
 
 # Streamlit 應用主函數
 def main():
@@ -107,7 +119,7 @@ def main():
     if st.button('開始搜尋', type="primary"):
         if keyword:
             with st.spinner(f'正在 Google 學術搜尋中搜尋「{keyword}」...'):
-                papers = fetch_google_scholar(keyword)
+                papers, screenshot = fetch_google_scholar(keyword)
             
             if papers:
                 st.success(f"成功抓取到 {len(papers)} 筆文獻結果：")
@@ -119,6 +131,10 @@ def main():
                     st.divider()
             else:
                 st.warning("未能抓取到任何文獻，請嘗試更換關鍵字。")
+
+            if screenshot:
+                st.subheader("🕵️‍♂️ 除錯資訊：案發現場截圖")
+                st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面，請檢查是否有 CAPTCHA。")
         else:
             st.warning("請先輸入要搜尋的關鍵字。")
 
