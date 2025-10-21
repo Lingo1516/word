@@ -4,3 +4,4 @@ selenium==4.0.0
 chromedriver-autoinstaller==0.2.2
 requests
 beautifulsoup4
+playwright
