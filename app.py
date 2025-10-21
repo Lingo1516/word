@@ -1,252 +1,240 @@
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
 import time
 import random
-import json
-import csv
-from datetime import datetime
+from urllib.parse import quote
 
-# 測試版本 - 不使用 Selenium
-print("=" * 80)
-print("Google Scholar 爬蟲 - 測試版本")
-print("=" * 80)
+# 頁面設定
+st.set_page_config(
+    page_title="Google Scholar 學術搜尋",
+    page_icon="📚",
+    layout="wide"
+)
 
-def test_imports():
-    """測試套件是否正確安裝"""
-    print("\n📦 測試套件安裝...")
+st.title("📚 Google Scholar 學術文獻搜尋")
+st.markdown("輸入關鍵字，即時搜尋 Google 學術文獻")
+
+# 使用者輸入
+col1, col2, col3 = st.columns([2, 1, 1])
+
+with col1:
+    keyword = st.text_input("🔍 搜尋關鍵字", placeholder="例如：人力資源管理")
+
+with col2:
+    year_start = st.number_input("起始年份", min_value=1900, max_value=2025, value=2020)
+
+with col3:
+    year_end = st.number_input("結束年份", min_value=1900, max_value=2025, value=2024)
+
+max_results = st.slider("最多顯示幾篇論文", min_value=5, max_value=50, value=10, step=5)
+
+def fetch_google_scholar_simple(keyword, year_start=None, year_end=None, max_results=10):
+    """
+    使用 requests + BeautifulSoup 爬取 Google Scholar
+    這是最穩定的方法，不需要瀏覽器
+    """
+    results = []
+    
+    # 建構搜尋 URL
+    encoded_keyword = quote(keyword)
+    url = f"https://scholar.google.com/scholar?q={encoded_keyword}&hl=zh-TW"
+    
+    if year_start and year_end:
+        url += f"&as_ylo={year_start}&as_yhi={year_end}"
+    
+    # 設定 Headers 模擬真實瀏覽器
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+    }
     
     try:
-        import selenium
-        print(f"✓ Selenium 版本: {selenium.__version__}")
-    except ImportError as e:
-        print(f"❌ Selenium 未安裝: {e}")
-        return False
-    
-    try:
-        from selenium import webdriver
-        print("✓ Selenium Webdriver 可用")
-    except ImportError as e:
-        print(f"❌ Webdriver 匯入失敗: {e}")
-        return False
-    
-    return True
-
-def test_chromedriver():
-    """測試 ChromeDriver 是否可用"""
-    print("\n🔍 測試 ChromeDriver...")
-    
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
-        import os
+        # 發送請求
+        response = requests.get(url, headers=headers, timeout=15)
         
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
+        # 檢查是否被阻擋
+        if response.status_code == 429:
+            return None, "請求過於頻繁，請稍後再試"
+        elif response.status_code != 200:
+            return None, f"無法連線到 Google Scholar (錯誤碼: {response.status_code})"
         
-        # 測試不同的 ChromeDriver 路徑
-        paths_to_test = [
-            None,  # 讓 Selenium 自動尋找
-            '/usr/bin/chromedriver',
-            '/usr/local/bin/chromedriver',
-            'chromedriver'
-        ]
+        # 檢查是否有 CAPTCHA
+        if 'captcha' in response.text.lower() or 'unusual traffic' in response.text.lower():
+            return None, "被 Google 偵測為機器人，請稍後再試或使用 VPN"
         
-        for path in paths_to_test:
+        # 解析 HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 找到所有論文結果
+        papers = soup.find_all('div', class_='gs_ri')
+        
+        if not papers:
+            return None, "找不到搜尋結果，可能被阻擋或關鍵字無結果"
+        
+        # 解析每篇論文
+        for idx, paper in enumerate(papers[:max_results], 1):
             try:
-                print(f"\n嘗試路徑: {path if path else '自動偵測'}")
-                
-                if path and os.path.exists(path):
-                    service = Service(path)
-                    driver = webdriver.Chrome(service=service, options=chrome_options)
-                elif path is None:
-                    driver = webdriver.Chrome(options=chrome_options)
-                else:
+                # 標題和連結
+                title_elem = paper.find('h3', class_='gs_rt')
+                if not title_elem:
                     continue
                 
-                print(f"✓ Chrome 啟動成功！")
-                print(f"✓ Chrome 版本: {driver.capabilities['browserVersion']}")
-                print(f"✓ ChromeDriver 版本: {driver.capabilities['chrome']['chromedriverVersion'].split()[0]}")
+                title = title_elem.get_text().strip()
                 
-                # 測試訪問網頁
-                print("\n測試訪問 Google...")
-                driver.get("https://www.google.com")
-                time.sleep(2)
-                print(f"✓ 頁面標題: {driver.title}")
+                # 取得連結
+                link_elem = title_elem.find('a')
+                link = link_elem['href'] if link_elem and link_elem.has_attr('href') else "N/A"
                 
-                driver.quit()
-                return True
+                # 作者和出版資訊
+                author_elem = paper.find('div', class_='gs_a')
+                author_info = author_elem.get_text().strip() if author_elem else "N/A"
+                
+                # 摘要
+                abstract_elem = paper.find('div', class_='gs_rs')
+                abstract = abstract_elem.get_text().strip() if abstract_elem else "N/A"
+                
+                # 引用次數
+                citations = "0"
+                cite_elem = paper.find('div', class_='gs_fl')
+                if cite_elem:
+                    cite_links = cite_elem.find_all('a')
+                    for link in cite_links:
+                        text = link.get_text()
+                        if '引用次數' in text or 'Cited by' in text:
+                            citations = text.split()[-1]
+                            break
+                
+                results.append({
+                    "序號": idx,
+                    "標題": title,
+                    "連結": link,
+                    "作者與出版": author_info,
+                    "摘要": abstract,
+                    "引用次數": citations
+                })
                 
             except Exception as e:
-                print(f"✗ 失敗: {str(e)[:100]}")
+                st.warning(f"解析第 {idx} 篇論文時發生錯誤")
                 continue
         
-        print("\n❌ 所有路徑都失敗")
-        return False
+        return results, None
         
+    except requests.exceptions.Timeout:
+        return None, "連線逾時，請檢查網路或稍後再試"
+    except requests.exceptions.RequestException as e:
+        return None, f"網路錯誤：{str(e)}"
     except Exception as e:
-        print(f"❌ ChromeDriver 測試失敗: {e}")
-        return False
+        return None, f"未知錯誤：{str(e)}"
 
-class SimpleScholarScraper:
-    """簡化版爬蟲 - 用於測試"""
-    
-    def __init__(self):
-        print("\n🚀 初始化爬蟲...")
-        
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
-        import os
-        
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        
-        try:
-            # 嘗試啟動 Chrome
-            if os.path.exists('/usr/bin/chromedriver'):
-                service = Service('/usr/bin/chromedriver')
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+# 搜尋按鈕
+if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
+    if not keyword:
+        st.error("❌ 請輸入搜尋關鍵字")
+    else:
+        with st.spinner("🔍 正在搜尋 Google Scholar..."):
+            # 加入隨機延遲，避免被偵測
+            time.sleep(random.uniform(1, 3))
+            
+            results, error = fetch_google_scholar_simple(
+                keyword, 
+                year_start, 
+                year_end,
+                max_results
+            )
+            
+            if error:
+                st.error(f"❌ {error}")
+                st.info("💡 解決建議：\n"
+                       "1. 等待 1-2 分鐘後再試\n"
+                       "2. 使用 VPN 更換 IP 位址\n"
+                       "3. 減少搜尋數量\n"
+                       "4. 嘗試不同的關鍵字")
+            elif not results:
+                st.warning("⚠️ 沒有找到相關文獻")
             else:
-                self.driver = webdriver.Chrome(options=chrome_options)
-            
-            print("✓ 瀏覽器啟動成功")
-            
-        except Exception as e:
-            print(f"❌ 瀏覽器啟動失敗: {e}")
-            raise
-    
-    def test_search(self, keyword="machine learning"):
-        """測試搜尋功能"""
-        print(f"\n🔍 測試搜尋: {keyword}")
-        
-        try:
-            from selenium.webdriver.common.by import By
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
-            
-            url = f"https://scholar.google.com/scholar?q={keyword}"
-            print(f"訪問: {url}")
-            
-            self.driver.get(url)
-            time.sleep(5)
-            
-            print(f"✓ 當前 URL: {self.driver.current_url}")
-            print(f"✓ 頁面標題: {self.driver.title}")
-            
-            # 檢查是否被阻擋
-            if "sorry" in self.driver.current_url.lower():
-                print("⚠️ 被 Google 阻擋（CAPTCHA）")
-                return []
-            
-            # 嘗試找到搜尋結果
-            wait = WebDriverWait(self.driver, 10)
-            papers = wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "gs_ri")))
-            
-            print(f"✓ 找到 {len(papers)} 篇論文")
-            
-            results = []
-            for i, paper in enumerate(papers[:3], 1):  # 只抓前3篇測試
-                try:
-                    title = paper.find_element(By.CLASS_NAME, "gs_rt").text
-                    print(f"\n{i}. {title[:80]}...")
-                    results.append({"title": title})
-                except Exception as e:
-                    print(f"⚠️ 解析第 {i} 篇失敗: {e}")
-            
-            return results
-            
-        except Exception as e:
-            print(f"❌ 搜尋失敗: {e}")
-            
-            # 保存截圖用於除錯
-            try:
-                screenshot_path = "error_screenshot.png"
-                self.driver.save_screenshot(screenshot_path)
-                print(f"📸 已保存截圖: {screenshot_path}")
-            except:
-                pass
-            
-            return []
-    
-    def close(self):
-        """關閉瀏覽器"""
-        try:
-            self.driver.quit()
-            print("\n✓ 瀏覽器已關閉")
-        except:
-            pass
+                st.success(f"✅ 成功找到 {len(results)} 篇論文！")
+                
+                # 顯示結果
+                for paper in results:
+                    with st.expander(f"📄 {paper['序號']}. {paper['標題']}", expanded=True):
+                        col_a, col_b = st.columns([3, 1])
+                        
+                        with col_a:
+                            st.markdown(f"**作者與出版：** {paper['作者與出版']}")
+                            st.markdown(f"**摘要：** {paper['摘要']}")
+                        
+                        with col_b:
+                            st.metric("引用次數", paper['引用次數'])
+                        
+                        if paper['連結'] != "N/A":
+                            st.markdown(f"🔗 [點此前往論文]({paper['連結']})")
+                        
+                        st.divider()
+                
+                # 匯出功能
+                st.subheader("💾 匯出結果")
+                
+                # 準備 CSV 資料
+                import io
+                csv_buffer = io.StringIO()
+                
+                # 寫入 CSV
+                csv_buffer.write("序號,標題,連結,作者與出版,引用次數,摘要\n")
+                for paper in results:
+                    csv_buffer.write(f"{paper['序號']},")
+                    csv_buffer.write(f'"{paper["標題"]}",')
+                    csv_buffer.write(f'"{paper["連結"]}",')
+                    csv_buffer.write(f'"{paper["作者與出版"]}",')
+                    csv_buffer.write(f"{paper['引用次數']},")
+                    csv_buffer.write(f'"{paper["摘要"]}"\n')
+                
+                csv_data = csv_buffer.getvalue()
+                
+                st.download_button(
+                    label="📥 下載 CSV 檔案",
+                    data=csv_data.encode('utf-8-sig'),
+                    file_name=f"scholar_{keyword}_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
 
-# ============ 主程式 ============
-if __name__ == "__main__":
-    print("\n開始測試...\n")
+# 側邊欄說明
+with st.sidebar:
+    st.header("📖 使用說明")
     
-    # 步驟 1: 測試套件
-    if not test_imports():
-        print("\n❌ 請先安裝必要套件:")
-        print("pip install selenium")
-        exit(1)
+    st.markdown("""
+    ### ✨ 功能特色
+    - 🔍 即時搜尋 Google Scholar
+    - 📅 年份範圍篩選
+    - 📊 顯示引用次數
+    - 💾 匯出 CSV 檔案
     
-    # 步驟 2: 測試 ChromeDriver
-    if not test_chromedriver():
-        print("\n" + "=" * 80)
-        print("❌ ChromeDriver 無法運行")
-        print("=" * 80)
-        print("\n💡 解決方案：")
-        print("\n【方案 1】使用 webdriver-manager (推薦)")
-        print("pip install webdriver-manager")
-        print("\n然後在程式中加入:")
-        print("from webdriver_manager.chrome import ChromeDriverManager")
-        print("service = Service(ChromeDriverManager().install())")
-        
-        print("\n【方案 2】手動安裝 ChromeDriver")
-        print("Ubuntu/Debian:")
-        print("  sudo apt-get update")
-        print("  sudo apt-get install -y chromium-browser chromium-chromedriver")
-        
-        print("\nmacOS:")
-        print("  brew install --cask google-chrome")
-        print("  brew install chromedriver")
-        
-        print("\nWindows:")
-        print("  1. 下載 ChromeDriver: https://chromedriver.chromium.org/")
-        print("  2. 放到 PATH 路徑中")
-        
-        print("\n【方案 3】使用替代方案")
-        print("考慮使用 Google Scholar API 或其他學術資料庫 API")
-        exit(1)
+    ### ⚠️ 注意事項
+    1. **請勿頻繁搜尋**，避免被 Google 阻擋
+    2. 如遇到「被偵測為機器人」，請等待 1-2 分鐘
+    3. 建議使用 **VPN** 提高成功率
+    4. 每次搜尋建議間隔 5 秒以上
     
-    # 步驟 3: 測試實際搜尋
-    print("\n" + "=" * 80)
-    print("開始實際搜尋測試")
-    print("=" * 80)
+    ### 🛠️ 技術資訊
+    - 使用 `requests` + `BeautifulSoup`
+    - 不需要瀏覽器，更輕量穩定
+    - 支援中文繁體搜尋
     
-    try:
-        scraper = SimpleScholarScraper()
-        results = scraper.test_search("人工智慧")
-        
-        if results:
-            print(f"\n✓✓✓ 測試成功！找到 {len(results)} 篇論文")
-        else:
-            print("\n⚠️ 沒有找到結果，但程式可以運行")
-        
-        scraper.close()
-        
-    except Exception as e:
-        print(f"\n❌ 測試失敗: {e}")
-        import traceback
-        print("\n詳細錯誤:")
-        traceback.print_exc()
+    ### 💡 常見問題
+    **Q: 為什麼會顯示「被阻擋」？**  
+    A: Google 有反爬蟲機制，請降低搜尋頻率或使用 VPN
     
-    print("\n" + "=" * 80)
-    print("測試完成")
-    print("=" * 80)
+    **Q: 如何提高成功率？**  
+    A: 1) 使用 VPN 2) 減少搜尋數量 3) 增加間隔時間
+    """)
+    
+    st.divider()
+    st.caption("Made with ❤️ by Streamlit")
+
+# 頁尾
+st.divider()
+st.caption("⚠️ 本工具僅供學術研究使用，請遵守 Google Scholar 使用條款
