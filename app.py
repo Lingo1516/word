@@ -4,35 +4,18 @@ from bs4 import BeautifulSoup
 import random
 import time
 
-# --- 設定代理伺服器 ---
-# 使用免費代理伺服器，增加搜尋成功機率
-@st.cache_resource
-def setup_proxy():
-    try:
-        proxies = {
-            "http": "http://your_proxy_here",
-            "https": "https://your_proxy_here",
-        }
-        # 測試代理伺服器是否有效
-        response = requests.get("https://scholar.google.com", proxies=proxies, timeout=10)
-        if response.status_code == 200:
-            return proxies
-        else:
-            st.warning("代理伺服器無法連線，將嘗試直接連線。")
-            return None
-    except Exception as e:
-        st.warning(f"代理伺服器設定失敗，錯誤：{e}")
-        return None
-
-# 使用代理進行搜尋的函式
-def fetch_google_scholar(keyword, proxies=None):
+# 抓取 Google Scholar 搜尋結果的函式
+def fetch_google_scholar(keyword):
     """抓取 Google Scholar 搜尋結果"""
     search_url = f"https://scholar.google.com/scholar?q={keyword}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
     
     try:
-        response = requests.get(search_url, headers=headers, proxies=proxies)
-        response.raise_for_status()  # 如果請求失敗，會拋出異常
+        # 直接發送 GET 請求
+        response = requests.get(search_url, headers=headers)
+        response.raise_for_status()  # 若請求失敗，會拋出異常
         soup = BeautifulSoup(response.text, "html.parser")
 
         results = []
@@ -64,14 +47,10 @@ def main():
     
     keyword = st.text_input("輸入關鍵字", "")
 
-    # 設置代理
-    with st.spinner("正在設定代理伺服器，請稍候..."):
-        proxies = setup_proxy()
-
     if st.button('開始搜尋'):
         if keyword:
             with st.spinner(f'搜尋「{keyword}」中...'):
-                papers, error = fetch_google_scholar(keyword, proxies)
+                papers, error = fetch_google_scholar(keyword)
 
             if papers:
                 st.success(f"成功抓取到 {len(papers)} 筆文獻結果：")
