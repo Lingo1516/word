@@ -4,34 +4,46 @@ from bs4 import BeautifulSoup
 import subprocess
 import sys
 
-# --- 自動安裝 Playwright 瀏覽器的設定區塊 ---
+# --- 自動安裝 Playwright 瀏覽器的設定區塊 (已修正) ---
+
 @st.cache_resource
-def install_playwright_browsers():
+def _install_playwright_core():
     """
-    在 Streamlit Cloud 環境中自動安裝 Playwright 所需的瀏覽器。
-    使用 st.cache_resource 快取，確保這個函數在每次部署中只會被執行一次。
+    這是核心的安裝函式，只包含安裝邏輯，沒有任何 Streamlit 介面指令。
+    這個函式將被快取。如果安裝失敗，它會拋出一個例外。
     """
-    with st.spinner("正在設定執行環境，請稍候..."):
-        try:
-            # 執行 playwright install 指令來下載瀏覽器
-            # 使用 sys.executable 確保我們使用的是當前 Python 環境中的 playwright
-            subprocess.run(
-                [sys.executable, "-m", "playwright", "install", "chromium"], 
-                check=True,
-                capture_output=True, # 捕捉輸出，避免顯示在 Streamlit 介面上
-                text=True
-            )
-            st.toast("✅ 環境設定完成！", icon="🎉")
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            st.error(f"安裝 Playwright 瀏覽器失敗，錯誤訊息：{e.stderr}")
-            st.stop() # 如果安裝失敗，則停止應用程式執行
-        except Exception as e:
-            st.error(f"發生未預期的錯誤於環境設定：{e}")
-            st.stop()
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"], 
+            check=True,
+            capture_output=True,
+            text=True
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        # 將原始錯誤包裝成一個新的例外，以便上層函式捕捉
+        raise RuntimeError(f"安裝 Playwright 瀏覽器失敗，錯誤訊息：{e.stderr}") from e
+    except Exception as e:
+        raise RuntimeError(f"環境設定時發生未預期的錯誤：{e}") from e
+
+def setup_environment():
+    """
+    這是一個處理使用者介面的包裝函式。
+    它會呼叫被快取的核心函式，並顯示進度條和錯誤訊息。
+    """
+    try:
+        # 呼叫核心安裝函式。如果已經快取，這裡會立刻返回。
+        _install_playwright_core()
+    except Exception as e:
+        # 如果核心函式在首次執行時拋出例外，就在這裡顯示錯誤並停止。
+        st.error(e)
+        st.stop()
 
 # 應用程式啟動時，先執行環境設定
-install_playwright_browsers()
+# 我們在主流程中顯示 spinner，因為 setup_environment 本身不應包含 UI
+with st.spinner("正在設定執行環境，請稍候..."):
+    setup_environment()
+st.toast("✅ 環境設定完成！", icon="🎉")
+
 # --- 設定區塊結束 ---
 
 
@@ -57,7 +69,7 @@ def fetch_academic_papers(keyword):
         st.error("頁面加載超時，可能是網路問題或網站結構已更改。請稍後再試。")
         return []
     except Exception as e:
-        st.error(f"發生未預期的錯誤：{e}")
+        st.error(f"抓取資料時發生未預期的錯誤：{e}")
         return []
 
 # Streamlit 應用主函數
