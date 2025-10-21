@@ -1,95 +1,124 @@
 import streamlit as st
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
-import time
+import subprocess
+import sys
+import urllib.parse
 
-# --- 在本機執行時，不再需要複雜的環境設定 ---
+# --- 雲端環境設定區塊 ---
+# 這個區塊確保在 Streamlit Cloud 上能自動安裝並設定好 Playwright
 
-# 使用 Playwright 抓取學術文獻的函數
-def fetch_academic_papers(keyword):
+@st.cache_resource
+def _install_playwright_core():
+    """核心安裝函式，會被快取。"""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"], 
+            check=True,
+            capture_output=True,
+            text=True
+        )
+    except Exception as e:
+        raise RuntimeError(f"安裝 Playwright 瀏覽器失敗: {e}") from e
+
+def setup_environment():
+    """處理使用者介面的包裝函式。"""
+    try:
+        _install_playwright_core()
+    except Exception as e:
+        st.error(e)
+        st.stop()
+
+# 應用程式啟動時，先執行環境設定
+with st.spinner("正在設定雲端執行環境，請稍候..."):
+    setup_environment()
+
+# --- 設定區塊結束 ---
+
+
+# 抓取 Google 學術搜尋結果的函數
+def fetch_google_scholar(keyword):
     """
-    使用 Playwright 前往華藝線上圖書館，抓取文獻標題。
-    如果失敗，會回傳螢幕截圖和 HTML 原始碼以供除錯。
+    使用 Playwright 前往 Google 學術搜尋，抓取文獻標題和連結。
     """
-    page = None
-    
+    results = []
+    # 將關鍵字進行 URL 編碼，避免特殊字元問題
+    encoded_keyword = urllib.parse.quote(keyword)
+    target_url = f'https://scholar.google.com/scholar?q={encoded_keyword}'
+
     try:
         with sync_playwright() as p:
-            st.info("1. 正在啟動瀏覽器...")
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-                viewport={'width': 1280, 'height': 800}
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+                java_script_enabled=True # 確保 JavaScript 正常執行
             )
             page = context.new_page()
-
-            target_url = f'https://www.airitilibrary.com/search?q={keyword}'
-            st.info(f"2. 正在前往目標網址：{target_url}")
+            
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
-            
-            st.info("3. 正在尋找 Cookie 同意按鈕...")
-            try:
-                cookie_button_selector = 'a.cookie_btn:has-text("我同意")'
-                page.locator(cookie_button_selector).click(timeout=10000)
-                st.toast("已自動點擊 Cookie 同意按鈕", icon="🍪")
-                time.sleep(2)
-            except PlaywrightTimeoutError:
-                st.info("找不到 Cookie 按鈕，可能無需點擊。")
-                pass 
-            
-            st.info("4. 正在等待搜尋結果載入...")
-            page.wait_for_selector('div.search_result_list', timeout=30000)
-            st.info("5. 成功找到搜尋結果！正在解析內容...")
+
+            # 等待搜尋結果的容器出現
+            page.wait_for_selector('#gs_res_ccl_mid', timeout=30000)
 
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
-            titles = soup.find_all('h3', class_='title')
-            titles_text = [title.text.strip() for title in titles]
             
-            return titles_text, None, None # 成功時回傳標題
-            
-    except PlaywrightTimeoutError:
-        st.error("頁面加載超時。請確認您的 VPN 已連線。")
-        screenshot_bytes = None
-        html_content = ""
-        try:
-            if page:
-                screenshot_bytes = page.screenshot()
-                html_content = page.content()
-        except Exception as screenshot_error:
-            st.warning(f"擷取除錯資訊時發生額外錯誤: {screenshot_error}")
-        return [], screenshot_bytes, html_content
+            # 找到所有的搜尋結果項目
+            paper_blocks = soup.find_all('div', class_='gs_r gs_or gs_scl')
 
+            for block in paper_blocks:
+                title_element = block.find('h3', class_='gs_rt')
+                if title_element and title_element.a:
+                    title = title_element.a.text
+                    link = title_element.a['href']
+                    
+                    # 嘗試抓取作者和簡介
+                    author_element = block.find('div', class_='gs_a')
+                    author = author_element.text if author_element else "作者資訊未提供"
+                    
+                    snippet_element = block.find('div', class_='gs_rs')
+                    snippet = snippet_element.text if snippet_element else ""
+
+                    results.append({
+                        "title": title,
+                        "link": link,
+                        "author": author,
+                        "snippet": snippet
+                    })
+            
+            browser.close()
+            return results
+
+    except PlaywrightTimeoutError:
+        st.error("頁面加載超時。Google 可能暫時阻擋了請求，請稍後再試。")
+        return []
     except Exception as e:
         st.error(f"抓取資料時發生未預期的錯誤：{e}")
-        return [], None, None
+        return []
 
 # Streamlit 應用主函數
 def main():
-    st.title("華藝線上圖書館文獻爬取")
-    st.write("輸入關鍵字，點擊按鈕後，程式會自動前往華藝線上圖書館抓取相關的文獻標題。")
+    st.set_page_config(layout="wide", page_title="Google 學術搜尋爬取工具")
+    st.title("🔎 Google 學術搜尋爬取工具")
+    st.write("輸入關鍵字，即可抓取相關的學術文獻標題、作者與連結。")
 
-    keyword = st.text_input("輸入您想要搜尋的關鍵字（例如：策略管理）", "")
+    keyword = st.text_input("輸入您想要搜尋的關鍵字（例如：Machine Learning）", "")
 
-    if st.button('抓取學術文獻'):
+    if st.button('開始搜尋', type="primary"):
         if keyword:
-            titles, screenshot, html = fetch_academic_papers(keyword)
+            with st.spinner(f'正在 Google 學術搜尋中搜尋「{keyword}」...'):
+                papers = fetch_google_scholar(keyword)
             
-            if titles:
-                st.success(f"成功抓取到 {len(titles)} 筆文獻標題：")
-                with st.expander("點此查看所有標題"):
-                    for i, title in enumerate(titles, 1):
-                        st.write(f"{i}. {title}")
+            if papers:
+                st.success(f"成功抓取到 {len(papers)} 筆文獻結果：")
+                for i, paper in enumerate(papers, 1):
+                    st.markdown(f"### {i}. [{paper['title']}]({paper['link']})")
+                    st.caption(f"**作者:** {paper['author']}")
+                    if paper['snippet']:
+                        st.markdown(f"> {paper['snippet']}")
+                    st.divider()
             else:
-                st.warning("未能抓取到任何文獻。")
-
-            if screenshot:
-                st.subheader("🕵️‍♂️ 除錯資訊：案發現場截圖")
-                st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面")
-            
-            if html:
-                with st.expander("點此查看當時的網頁原始碼"):
-                    st.code(html, language='html')
+                st.warning("未能抓取到任何文獻，請嘗試更換關鍵字。")
         else:
             st.warning("請先輸入要搜尋的關鍵字。")
 
