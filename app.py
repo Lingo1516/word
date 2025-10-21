@@ -1,20 +1,40 @@
 import streamlit as st
-from scholarly import scholarly
+from scholarly import scholarly, ProxyGenerator
 import time
 
-# --- 在這個版本中，我們移除了有問題的代理伺服器設定 ---
-# --- 程式將使用更直接的方式進行網路請求 ---
+# --- 最終解決方案：啟用代理伺服器 ---
+# 我們將使用免費的代理伺服器來避免 IP 被 Google 封鎖。
+# 這會稍微增加搜尋時間，但是能大幅提高成功率。
+
+@st.cache_resource
+def setup_proxy():
+    """設定並測試代理伺-服器，此過程將被快取。"""
+    try:
+        pg = ProxyGenerator()
+        # 我們需要一個能用的代理伺-服器
+        # a FreeProxies() will fetch from a database of free proxies
+        success = pg.FreeProxies()
+        if not success:
+            st.warning("無法找到可用的免費代理伺服器，將嘗試直接連線。")
+            return None
+        scholarly.use_proxy(pg)
+        return pg
+    except Exception as e:
+        st.warning(f"設定代理時發生錯誤：{e}，將嘗試直接連線。")
+        return None
+
+# 應用程式啟動時，先設定代理
+with st.spinner("正在尋找並設定代理伺服器，請稍候..."):
+    setup_proxy()
 
 # 抓取 Google 學術搜尋結果的函數
 def fetch_google_scholar(keyword):
     """
     使用 scholarly 函式庫來搜尋 Google 學術。
-    這個方法更穩定，更不容易被阻擋。
     """
     results = []
     try:
         # search_pubs 會回傳一個產生器 (generator)
-        # 語言已在 URL 中設定 (hl=zh-TW)，此處不需額外設定
         search_query = scholarly.search_pubs(keyword)
         
         # 我們只取前10筆結果，避免請求時間過長
@@ -22,16 +42,14 @@ def fetch_google_scholar(keyword):
             if i >= 10:
                 break
                 
-            # 'bib' 字典中包含了我們需要的資訊
             bib = pub.get('bib', {})
             title = bib.get('title', '標題未提供')
             author = bib.get('author', '作者未提供')
-            # 將作者列表轉換為字串
             if isinstance(author, list):
                 author = ', '.join(author)
             
             publication = bib.get('venue', '出版資訊未提供')
-            link = pub.get('pub_url', '#') # 取得文章的 Google Scholar 連結
+            link = pub.get('pub_url', '#')
 
             results.append({
                 "title": title,
@@ -39,27 +57,25 @@ def fetch_google_scholar(keyword):
                 "author": author,
                 "publication": publication
             })
-            # 每次查詢後稍微休息一下，避免請求過於頻繁
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.5, 1.5)) # 增加隨機延遲
 
-        return results, None # 成功時回傳結果
+        return results, None
 
     except Exception as e:
-        # 處理 scholarly 可能遇到的各種網路或解析錯誤
         error_message = f"搜尋時發生錯誤：{e}。這可能是因為請求過於頻繁或 Google 暫時封鎖了 IP，請稍後再試。"
         return [], error_message
 
 # Streamlit 應用主函數
 def main():
     st.set_page_config(layout="wide", page_title="Google 學術搜尋工具")
-    st.title("🔎 Google 學術搜尋工具 (最終修正版)")
-    st.write("輸入關鍵字，即可抓取相關的學術文獻標題、作者與連結。採用 `scholarly` 函式庫，成功率更高。")
+    st.title("🔎 Google 學術搜尋工具 (代理版)")
+    st.write("輸入關鍵字，即可抓取相關的學術文獻標題、作者與連結。此版本使用代理伺服器以提高成功率。")
 
     keyword = st.text_input("輸入您想要搜尋的關鍵字（例如：人工智慧）", "")
 
     if st.button('開始搜尋', type="primary"):
         if keyword:
-            with st.spinner(f'正在搜尋「{keyword}」...'):
+            with st.spinner(f'正在透過代理伺服器搜尋「{keyword}」...'):
                 papers, error = fetch_google_scholar(keyword)
             
             if papers:
@@ -73,7 +89,7 @@ def main():
                 st.warning("未能抓取到任何文獻，請嘗試更換關鍵字。")
 
             if error:
-                st.error(error) # 顯示錯誤訊息
+                st.error(error)
         else:
             st.warning("請先輸入要搜尋的關鍵字。")
 
