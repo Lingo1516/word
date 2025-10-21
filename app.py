@@ -5,14 +5,11 @@ import subprocess
 import sys
 import time
 
-# --- 自動安裝 Playwright 瀏覽器的設定區塊 (已修正) ---
+# --- 自動安裝 Playwright 瀏覽器的設定區塊 ---
 
 @st.cache_resource
 def _install_playwright_core():
-    """
-    這是核心的安裝函式，只包含安裝邏輯，沒有任何 Streamlit 介面指令。
-    這個函式將被快取。如果安裝失敗，它會拋出一個例外。
-    """
+    """核心安裝函式，會被快取。"""
     try:
         subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"], 
@@ -20,27 +17,17 @@ def _install_playwright_core():
             capture_output=True,
             text=True
         )
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        # 將原始錯誤包裝成一個新的例外，以便上層函式捕捉
-        raise RuntimeError(f"安裝 Playwright 瀏覽器失敗，錯誤訊息：{e.stderr}") from e
     except Exception as e:
-        raise RuntimeError(f"環境設定時發生未預期的錯誤：{e}") from e
+        raise RuntimeError(f"安裝 Playwright 瀏覽器失敗: {e}") from e
 
 def setup_environment():
-    """
-    這是一個處理使用者介面的包裝函式。
-    它會呼叫被快取的核心函式，並顯示進度條和錯誤訊息。
-    """
+    """處理使用者介面的包裝函式。"""
     try:
-        # 呼叫核心安裝函式。如果已經快取，這裡會立刻返回。
         _install_playwright_core()
     except Exception as e:
-        # 如果核心函式在首次執行時拋出例外，就在這裡顯示錯誤並停止。
         st.error(e)
         st.stop()
 
-# 應用程式啟動時，先執行環境設定
-# 我們在主流程中顯示 spinner，因為 setup_environment 本身不應包含 UI
 with st.spinner("正在設定執行環境，請稍候..."):
     setup_environment()
 st.toast("✅ 環境設定完成！", icon="🎉")
@@ -51,36 +38,37 @@ st.toast("✅ 環境設定完成！", icon="🎉")
 # 使用 Playwright 抓取學術文獻的函數
 def fetch_academic_papers(keyword):
     """
-    使用 Playwright 前往華藝線上圖書館，根據關鍵字抓取文獻標題。
+    使用 Playwright 前往華藝線上圖書館，抓取文獻標題。
+    如果失敗，會回傳螢幕截圖和 HTML 原始碼以供除錯。
     """
+    screenshot_bytes = None
+    html_content = ""
+    
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+                viewport={'width': 1280, 'height': 800} # 設定視窗大小
             )
             page = context.new_page()
 
-            target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
+            # --- 變更：改用更簡單的標準搜尋頁面 ---
+            # 有時候進階搜尋頁面會有更強的反爬蟲機制
+            target_url = f'https://www.airitilibrary.com/search?q={keyword}'
             
-            # 前往目標頁面，使用 domcontentloaded 加快初步載入速度
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             
-            # --- 新增：處理 Cookie 同意按鈕 ---
-            # 給予頁面短暫時間渲染，然後嘗試點擊 Cookie 按鈕
+            # --- 處理 Cookie 同意按鈕 ---
             try:
-                # 等待「我同意」按鈕出現（最多等5秒），如果出現就點擊它
                 cookie_button_selector = 'a.cookie_btn:has-text("我同意")'
-                page.locator(cookie_button_selector).click(timeout=5000)
+                page.locator(cookie_button_selector).click(timeout=10000)
                 st.toast("已自動點擊 Cookie 同意按鈕", icon="🍪")
-                # 點擊後多等待一秒，確保頁面反應
-                time.sleep(1)
+                time.sleep(2) # 點擊後等待一下
             except PlaywrightTimeoutError:
-                # 如果5秒內沒找到按鈕，代表它可能不存在，直接忽略此錯誤繼續執行
                 pass 
-            # --- 新增結束 ---
             
-            # 現在才等待我們真正需要的搜尋結果容器元素出現
+            # 等待搜尋結果容器元素出現
             page.wait_for_selector('div.search_result_list', timeout=30000)
 
             html = page.content()
@@ -91,13 +79,26 @@ def fetch_academic_papers(keyword):
             context.close()
             browser.close()
             
-            return titles_text
-    except PlaywrightTimeoutError:
-        st.error("頁面加載超時。這很可能是因為目標網站啟動了反爬蟲機制，或是網站結構已更改。請稍後再試。")
-        return []
+            return titles_text, None, None # 成功時回傳標題
+            
+    except PlaywrightTimeoutError as e:
+        st.error("頁面加載超時，已擷取當前畫面以供除錯。")
+        # --- 新增：錯誤時擷取畫面和原始碼 ---
+        try:
+            screenshot_bytes = page.screenshot()
+            html_content = page.content()
+        except Exception as screenshot_error:
+            st.warning(f"擷取除錯資訊時發生額外錯誤: {screenshot_error}")
+        # 即使出錯也要確保瀏覽器關閉
+        if 'browser' in locals() and browser.is_connected():
+            browser.close()
+        return [], screenshot_bytes, html_content # 失敗時回傳除錯資訊
+
     except Exception as e:
         st.error(f"抓取資料時發生未預期的錯誤：{e}")
-        return []
+        if 'browser' in locals() and browser.is_connected():
+            browser.close()
+        return [], None, None
 
 # Streamlit 應用主函數
 def main():
@@ -108,8 +109,8 @@ def main():
 
     if st.button('抓取學術文獻'):
         if keyword:
-            with st.spinner(f'正在搜尋「{keyword}」的相關文獻，請稍候...'):
-                titles = fetch_academic_papers(keyword)
+            with st.spinner(f'正在搜尋「{keyword}」的相關文獻...'):
+                titles, screenshot, html = fetch_academic_papers(keyword)
             
             if titles:
                 st.success(f"成功抓取到 {len(titles)} 筆文獻標題：")
@@ -117,11 +118,19 @@ def main():
                     for i, title in enumerate(titles, 1):
                         st.write(f"{i}. {title}")
             else:
-                st.warning("未能抓取到任何文獻，請檢查關鍵字是否正確，或該關鍵字可能沒有相關結果。")
+                st.warning("未能抓取到任何文獻。")
+
+            # --- 新增：如果收到除錯資訊，就顯示出來 ---
+            if screenshot:
+                st.subheader("🕵️‍♂️ 除錯資訊：案發現場截圖")
+                st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面")
+            
+            if html:
+                with st.expander("點此查看當時的網頁原始碼"):
+                    st.code(html, language='html')
         else:
             st.warning("請先輸入要搜尋的關鍵字。")
 
-# 確保在直接運行此程式時，執行 main 函數
 if __name__ == "__main__":
     main()
 
