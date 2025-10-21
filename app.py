@@ -1,21 +1,51 @@
-import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import random
 import time
+from fake_useragent import UserAgent
 
-# 抓取 Google Scholar 搜尋結果的函式
+# 代理伺服器池
+proxy_pool = [
+    "http://proxy1.com:8080",
+    "http://proxy2.com:8080",
+    "http://proxy3.com:8080",
+    # 添加更多的代理伺服器地址
+]
+
+# 用戶代理池
+user_agents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edge/91.0.864.48",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/77.0.4054.172",
+    # 添加更多的 User-Agent
+]
+
+# 隨機選擇代理和 User-Agent
+def get_random_proxy():
+    return random.choice(proxy_pool)
+
+def get_random_user_agent():
+    return random.choice(user_agents)
+
+# 抓取 Google Scholar 搜尋結果
 def fetch_google_scholar(keyword):
-    """抓取 Google Scholar 搜尋結果"""
     search_url = f"https://scholar.google.com/scholar?q={keyword}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
     
+    headers = {
+        "User-Agent": get_random_user_agent(),
+    }
+
+    # 隨機選擇代理
+    proxies = {
+        "http": get_random_proxy(),
+        "https": get_random_proxy(),
+    }
+
     try:
-        # 直接發送 GET 請求
-        response = requests.get(search_url, headers=headers)
-        response.raise_for_status()  # 若請求失敗，會拋出異常
+        # 發送請求
+        response = requests.get(search_url, headers=headers, proxies=proxies, timeout=10)
+        response.raise_for_status()  # 如果請求失敗，會拋出異常
+        
         soup = BeautifulSoup(response.text, "html.parser")
 
         results = []
@@ -32,41 +62,22 @@ def fetch_google_scholar(keyword):
                 "publication": publication
             })
 
-            # 隨機延遲，模擬人類行為
-            time.sleep(random.uniform(1, 2))
+            # 隨機延遲，增加延遲時間來模擬人類行為
+            time.sleep(random.uniform(3, 6))  # 3到6秒的隨機延遲
 
         return results, None
     except requests.exceptions.RequestException as e:
         return [], f"請求錯誤：{e}，請稍後再試。"
 
-# Streamlit 主函式
-def main():
-    st.set_page_config(layout="wide", page_title="Google Scholar 搜尋工具")
-    st.title("🔎 Google Scholar 搜尋工具")
-    st.write("輸入關鍵字，即可抓取相關的學術文獻資料。")
-    
-    keyword = st.text_input("輸入關鍵字", "")
+# 範例使用：
+keyword = "人力資源"
+papers, error = fetch_google_scholar(keyword)
 
-    if st.button('開始搜尋'):
-        if keyword:
-            with st.spinner(f'搜尋「{keyword}」中...'):
-                papers, error = fetch_google_scholar(keyword)
-
-            if papers:
-                st.success(f"成功抓取到 {len(papers)} 筆文獻結果：")
-                for i, paper in enumerate(papers, 1):
-                    st.markdown(f"### {i}. [{paper['title']}]({paper['link']})")
-                    st.caption(f"**作者與發表資訊:** {paper['author']}")
-                    st.markdown(f"**發表於:** {paper['publication']}")
-                    st.divider()
-
-            else:
-                st.warning("未能抓取到文獻，請嘗試更換關鍵字或稍後再試。")
-
-            if error:
-                st.error(error)
-        else:
-            st.warning("請先輸入關鍵字。")
-
-if __name__ == "__main__":
-    main()
+if papers:
+    for i, paper in enumerate(papers, 1):
+        print(f"{i}. {paper['title']} - {paper['link']}")
+        print(f"作者: {paper['author']}")
+        print(f"發表於: {paper['publication']}")
+        print("-" * 80)
+else:
+    print(f"發生錯誤: {error}")
