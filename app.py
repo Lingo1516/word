@@ -1,11 +1,26 @@
 import streamlit as st
-import requests
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 import time
 import random
 from urllib.parse import quote
 import csv
 import io
+import subprocess
+import sys
+
+# --- Playwright 雲端環境設定 ---
+# 這個區塊會在使用者的雲端主機上自動安裝執行爬蟲所需的瀏覽器
+@st.cache_resource
+def install_playwright():
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        st.error(f"安裝 Playwright 瀏覽器失敗：{e}")
+        st.stop()
+
+install_playwright()
+# --- 設定結束 ---
 
 # 頁面設定
 st.set_page_config(
@@ -14,10 +29,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📚 NDLTD 台灣學術文獻搜尋")
-st.markdown("輸入關鍵字，搜尋台灣博碩士論文（更新至 2025 年 10 月 22 日 01:37 CST）")
+st.title("📚 NDLTD 台灣學術文獻搜尋 (隱身版)")
+st.markdown(f"輸入關鍵字，即可即時搜尋台灣博碩士論文（更新至 {time.strftime('%Y 年 %m 月 %d 日 %H:%M CST')}）")
 
-# 初始化 session state 追蹤上次搜尋時間
+# 初始化 session state
 if 'last_search_time' not in st.session_state:
     st.session_state['last_search_time'] = 0
 
@@ -31,91 +46,74 @@ with col3:
     year_end = st.number_input("結束年份", min_value=1900, max_value=2025, value=2025)
 max_results = st.slider("最多顯示幾篇論文", min_value=5, max_value=50, value=10, step=5)
 
-def fetch_taiwan_scholar(keyword, year_start=None, year_end=None, max_results=10):
+def fetch_taiwan_scholar_playwright(keyword, year_start=None, year_end=None, max_results=10):
     """
-    從 NDLTD 爬取台灣學術文獻，優化以避免被檢測
+    使用 Playwright 從 NDLTD 爬取台灣學術文獻，以達到最佳的隱身效果。
     """
     results = []
-
-    # 建構搜尋 URL (NDLTD 台灣博碩士論文)
+    
     encoded_keyword = quote(keyword.encode('big5'))
     url = f"https://ndltd.ncl.edu.tw/cgi-bin/gs32/gsweb.cgi?o=dnclcdr&s={encoded_keyword}"
-
     if year_start and year_end:
         url += f"&range=dr1%3E={year_start}+dr1%3C={year_end}"
 
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Referer': 'https://ndltd.ncl.edu.tw/',
-        'Connection': 'keep-alive'
-    }
-
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        with sync_playwright() as p:
+            with st.spinner("🚀 正在啟動隱身瀏覽器..."):
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+                    locale='zh-TW'
+                )
+                page = context.new_page()
+            
+            with st.spinner(f"🕵️‍♀️ 正在前往目標頁面..."):
+                page.goto(url, timeout=30000, wait_until='domcontentloaded')
+                # 等待搜尋結果的第一個項目出現，確保頁面已載入
+                page.wait_for_selector('div.gs_c', timeout=20000)
 
-        if response.status_code == 429:
-            return None, "請求過於頻繁，請稍後再試"
-        elif response.status_code != 200:
-            return None, f"無法連線到 NDLTD (錯誤碼: {response.status_code})"
-
-        soup = BeautifulSoup(response.text, 'html.parser')
+            with st.spinner("🔍 正在解析頁面內容..."):
+                html = page.content()
+                soup = BeautifulSoup(html, 'html.parser')
+            
+            browser.close()
 
         # 檢查是否有訪問限制
-        if "請輸入驗證碼" in response.text or "未授權" in response.text:
+        if "請輸入驗證碼" in html or "未授權" in html:
             return None, "被 NDLTD 偵測為機器人，請稍後再試或使用 VPN 切換 IP"
 
-        # 找到所有論文結果
         papers = soup.find_all('div', class_='gs_c')
-
         if not papers:
             return None, "找不到搜尋結果，可能關鍵字無匹配或被限制"
 
         for idx, paper in enumerate(papers[:max_results], 1):
             try:
-                # 標題和連結
                 title_elem = paper.find('a', class_='gs_ct')
-                if not title_elem:
-                    continue
+                if not title_elem: continue
 
                 title = title_elem.get_text().strip()
                 link = "https://ndltd.ncl.edu.tw" + title_elem['href'] if title_elem.has_attr('href') else "N/A"
-
-                # 作者和年份
+                
                 meta_elem = paper.find('div', class_='gs_a')
                 meta_text = meta_elem.get_text().strip() if meta_elem else "N/A"
                 author_parts = meta_text.split(" - ")
-                author = author_parts[0] if author_parts and author_parts[0].strip() else "匿名作者"
+                author = author_parts[0].strip() if author_parts else "匿名作者"
                 year = author_parts[-1].split()[0] if author_parts and len(author_parts[-1].split()) > 0 else "N/A"
-
-                # 機構
                 institution = author_parts[1] if len(author_parts) > 1 else "N/A"
 
                 results.append({
-                    "序號": idx,
-                    "作者": author,
-                    "年份": year,
-                    "標題": title,
-                    "機構": institution,
-                    "連結": link
+                    "序號": idx, "作者": author, "年份": year, "標題": title, "機構": institution, "連結": link
                 })
-
             except Exception as e:
                 st.warning(f"解析第 {idx} 篇論文時發生錯誤：{str(e)}")
                 continue
-
-        if len(results) < max_results:
-            st.info(f"⚠️ 僅找到 {len(results)} 篇論文，低於設定的 {max_results} 篇")
-
+        
         return results, None
 
-    except requests.exceptions.Timeout:
-        return None, "連線逾時，請檢查網路或稍後再試"
-    except requests.exceptions.RequestException as e:
-        return None, f"網路錯誤：{str(e)}"
+    except PlaywrightTimeoutError:
+        return None, "頁面載入逾時，NDLTD 可能暫時無法連線或啟動了更強的反爬蟲機制"
     except Exception as e:
-        return None, f"未知錯誤：{str(e)}"
+        return None, f"發生未預期的錯誤：{str(e)}"
 
 # 搜尋按鈕
 if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
@@ -123,92 +121,67 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
         st.error("❌ 請輸入搜尋關鍵字")
     elif year_start > year_end:
         st.error("❌ 起始年份不能晚於結束年份")
-    elif time.time() - st.session_state['last_search_time'] < 10:  # 增加最小間隔至 10 秒
+    elif time.time() - st.session_state['last_search_time'] < 10:
         st.error("❌ 搜尋過於頻繁，請等待至少 10 秒後再試")
     else:
-        with st.spinner("🔍 正在搜尋 NDLTD..."):
-            st.session_state['last_search_time'] = time.time()
-            time.sleep(random.uniform(5, 10))  # 延長隨機延遲至 5-10 秒
+        st.session_state['last_search_time'] = time.time()
+        
+        results, error = fetch_taiwan_scholar_playwright(
+            keyword, year_start, year_end, max_results
+        )
 
-            results, error = fetch_taiwan_scholar(
-                keyword,
-                year_start,
-                year_end,
-                max_results
-            )
-
-            if error:
-                st.error(f"❌ {error}")
-                st.info("💡 解決建議：\n"
-                        "1. 等待 1-2 分鐘後再試\n"
-                        "2. 使用 VPN 切換 IP 位址\n"
-                        "3. 減少搜尋數量或頻率")
-            elif not results:
-                st.warning("⚠️ 沒有找到相關文獻")
-            else:
-                st.success(f"✅ 成功找到 {len(results)} 篇論文！")
-
-                # 顯示結果 (APA 格式)
-                for paper in results:
-                    apa_citation = (
-                        f"{paper['作者']} ({paper['年份']}).\n"
-                        f"{paper['標題']} [碩士論文，{paper['機構']}]. "
-                        f"臺灣博碩士論文知識加值系統. {paper['連結']}"
-                    )
-                    with st.expander(f"📄 {paper['序號']}. {paper['標題']}", expanded=True):
-                        st.markdown(f"**APA 引用格式：** {apa_citation}")
-                        st.divider()
-
-                # 匯出功能
-                st.subheader("💾 匯出結果")
-
-                csv_buffer = io.StringIO()
-                writer = csv.writer(csv_buffer, quoting=csv.QUOTE_MINIMAL)
-                writer.writerow(["序號", "作者", "年份", "標題", "機構", "連結"])
-                for paper in results:
-                    writer.writerow([
-                        paper["序號"],
-                        paper["作者"],
-                        paper["年份"],
-                        paper["標題"],
-                        paper["機構"],
-                        paper["連結"]
-                    ])
-
-                csv_data = csv_buffer.getvalue()
-
-                st.download_button(
-                    label="📥 下載 CSV 檔案",
-                    data=csv_data.encode('utf-8-sig'),
-                    file_name=f"ndlt_{keyword}_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
+        if error:
+            st.error(f"❌ {error}")
+        elif not results:
+            st.warning("⚠️ 沒有找到相關文獻")
+        else:
+            st.success(f"✅ 成功找到 {len(results)} 篇論文！")
+            for paper in results:
+                apa_citation = (
+                    f"{paper['作者']} ({paper['年份']}).\n"
+                    f"*{paper['標題']}* "
+                    f"[{paper['機構']}碩博士論文]. "
+                    f"臺灣博碩士論文知識加值系統. {paper['連結']}"
                 )
+                with st.expander(f"📄 {paper['序號']}. {paper['標題']}", expanded=True):
+                    st.markdown(f"**APA 引用格式：**")
+                    st.code(apa_citation, language='text')
+                    st.divider()
+
+            # 匯出功能
+            st.subheader("💾 匯出結果")
+            csv_buffer = io.StringIO()
+            writer = csv.DictWriter(csv_buffer, fieldnames=results[0].keys())
+            writer.writeheader()
+            writer.writerows(results)
+            csv_data = csv_buffer.getvalue()
+            st.download_button(
+                label="📥 下載 CSV 檔案",
+                data=csv_data.encode('utf-8-sig'),
+                file_name=f"ndltd_{keyword}_{time.strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
 
 # 側邊欄說明
 with st.sidebar:
     st.header("📖 使用說明")
-
     st.markdown("""
     ### ✨ 功能特色
+    - 🚀 **全新引擎**：使用 Playwright 模擬真人瀏覽，有效降低被偵測風險。
     - 🔍 搜尋台灣 NDLTD 學術文獻
     - 📅 年份範圍篩選
     - 📑 APA 格式輸出
     - 💾 匯出 CSV 檔案
 
     ### ⚠️ 注意事項
-    1. **請勿頻繁搜尋**，每次搜尋需間隔至少 10 秒
-    2. 如遇到「被偵測為機器人」，請等待 1-2 分鐘或使用 VPN
-    3. 建議減少搜尋結果數量以降低檢測風險
-
-    ### 🛠️ 技術資訊
-    - 使用 `requests` + `BeautifulSoup`
-    - 專為 NDLTD 台灣資料庫設計
-    - 支援中文搜尋
+    1. **請勿頻繁搜尋**，每次搜尋需間隔至少 10 秒。
+    2. 首次搜尋會花較長時間設定瀏覽器環境。
+    3. 如遇錯誤，請等待 1-2 分鐘後再試。
     """)
-
     st.divider()
     st.caption("Made with ❤️ by Streamlit")
 
 # 頁尾
 st.divider()
 st.caption("⚠️ 本工具僅供學術研究使用，請遵守 NDLTD 使用條款。")
+
