@@ -1,41 +1,33 @@
 import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 
-# 設置 Selenium 使用無頭模式（不打開瀏覽器視窗）
-def setup_driver():
-    options = Options()
-    options.add_argument("--headless")  # 不顯示瀏覽器
-    options.add_argument("--disable-gpu")
-    driver = webdriver.Chrome(options=options)
-    return driver
-
-# 根據關鍵字抓取文獻的函數
+# 使用 Playwright 抓取學術文獻的函數
 def fetch_academic_papers(keyword):
-    driver = setup_driver()
+    with sync_playwright() as p:
+        # 使用 Chromium 瀏覽器
+        browser = p.chromium.launch(headless=True)  # headless 模式不顯示瀏覽器視窗
+        page = browser.new_page()
 
-    # 華藝線上圖書館的搜尋頁面，根據關鍵字搜尋
-    target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
-    driver.get(target_url)
+        # 華藝線上圖書館的搜尋頁面，根據關鍵字搜尋
+        target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
+        page.goto(target_url)
 
-    # 等待頁面加載完成，並抓取頁面內容
-    driver.implicitly_wait(10)  # 等待最大 10 秒
+        # 等待網頁加載完成
+        page.wait_for_selector('h3.title')  # 等待標題元素加載完成
 
-    # 獲取頁面 HTML 內容
-    page_source = driver.page_source
-    driver.quit()  # 關閉瀏覽器
+        # 獲取頁面內容
+        html = page.content()
+        soup = BeautifulSoup(html, 'html.parser')
 
-    # 解析 HTML 內容
-    soup = BeautifulSoup(page_source, 'html.parser')
+        # 抓取文獻標題
+        titles = soup.find_all('h3', class_='title')
+        titles_text = [title.get_text() for title in titles]
 
-    # 抓取文獻標題
-    titles = soup.find_all('h3', class_='title')
-    titles_text = [title.get_text() for title in titles]
+        # 關閉瀏覽器
+        browser.close()
 
-    # 返回文獻標題
-    return titles_text
+        return titles_text
 
 # Streamlit 應用主函數
 def main():
