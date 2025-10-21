@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 st.title("📚 NDLTD 台灣學術文獻搜尋")
-st.markdown("輸入關鍵字，搜尋台灣博碩士論文（更新至 2025 年 10 月 22 日 01:34 CST）")
+st.markdown("輸入關鍵字，搜尋台灣博碩士論文（更新至 2025 年 10 月 22 日 01:37 CST）")
 
 # 初始化 session state 追蹤上次搜尋時間
 if 'last_search_time' not in st.session_state:
@@ -33,7 +33,7 @@ max_results = st.slider("最多顯示幾篇論文", min_value=5, max_value=50, v
 
 def fetch_taiwan_scholar(keyword, year_start=None, year_end=None, max_results=10):
     """
-    從 NDLTD 爬取台灣學術文獻
+    從 NDLTD 爬取台灣學術文獻，優化以避免被檢測
     """
     results = []
 
@@ -45,9 +45,11 @@ def fetch_taiwan_scholar(keyword, year_start=None, year_end=None, max_results=10
         url += f"&range=dr1%3E={year_start}+dr1%3C={year_end}"
 
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': 'https://ndltd.ncl.edu.tw/',
+        'Connection': 'keep-alive'
     }
 
     try:
@@ -62,7 +64,7 @@ def fetch_taiwan_scholar(keyword, year_start=None, year_end=None, max_results=10
 
         # 檢查是否有訪問限制
         if "請輸入驗證碼" in response.text or "未授權" in response.text:
-            return None, "被 NDLTD 偵測為機器人，請稍後再試或檢查 IP"
+            return None, "被 NDLTD 偵測為機器人，請稍後再試或使用 VPN 切換 IP"
 
         # 找到所有論文結果
         papers = soup.find_all('div', class_='gs_c')
@@ -121,12 +123,12 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
         st.error("❌ 請輸入搜尋關鍵字")
     elif year_start > year_end:
         st.error("❌ 起始年份不能晚於結束年份")
-    elif time.time() - st.session_state['last_search_time'] < 5:
-        st.error("❌ 搜尋過於頻繁，請等待幾秒後再試")
+    elif time.time() - st.session_state['last_search_time'] < 10:  # 增加最小間隔至 10 秒
+        st.error("❌ 搜尋過於頻繁，請等待至少 10 秒後再試")
     else:
         with st.spinner("🔍 正在搜尋 NDLTD..."):
             st.session_state['last_search_time'] = time.time()
-            time.sleep(random.uniform(1, 3))
+            time.sleep(random.uniform(5, 10))  # 延長隨機延遲至 5-10 秒
 
             results, error = fetch_taiwan_scholar(
                 keyword,
@@ -139,8 +141,8 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
                 st.error(f"❌ {error}")
                 st.info("💡 解決建議：\n"
                         "1. 等待 1-2 分鐘後再試\n"
-                        "2. 使用 VPN 更換 IP 位址\n"
-                        "3. 減少搜尋數量")
+                        "2. 使用 VPN 切換 IP 位址\n"
+                        "3. 減少搜尋數量或頻率")
             elif not results:
                 st.warning("⚠️ 沒有找到相關文獻")
             else:
@@ -194,9 +196,9 @@ with st.sidebar:
     - 💾 匯出 CSV 檔案
 
     ### ⚠️ 注意事項
-    1. **請勿頻繁搜尋**，每次搜尋需間隔 5 秒以上
-    2. 如遇到「被偵測為機器人」，請等待 1-2 分鐘
-    3. 建議使用 VPN 提高成功率
+    1. **請勿頻繁搜尋**，每次搜尋需間隔至少 10 秒
+    2. 如遇到「被偵測為機器人」，請等待 1-2 分鐘或使用 VPN
+    3. 建議減少搜尋結果數量以降低檢測風險
 
     ### 🛠️ 技術資訊
     - 使用 `requests` + `BeautifulSoup`
