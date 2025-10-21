@@ -15,9 +15,9 @@ st.set_page_config(
 )
 
 st.title("📚 NDLTD 台灣學術文獻搜尋")
-st.markdown("輸入關鍵字，搜尋台灣博碩士論文")
+st.markdown("輸入關鍵字，搜尋台灣博碩士論文（更新至 2025 年 10 月 22 日）")
 
-# 初始化 session state 用於追蹤上次搜尋時間
+# 初始化 session state 追蹤上次搜尋時間
 if 'last_search_time' not in st.session_state:
     st.session_state['last_search_time'] = 0
 
@@ -83,11 +83,12 @@ def fetch_taiwan_scholar(keyword, year_start=None, year_end=None, max_results=10
                 # 作者和年份
                 meta_elem = paper.find('div', class_='gs_a')
                 meta_text = meta_elem.get_text().strip() if meta_elem else "N/A"
-                author = meta_text.split(" - ")[0] if " - " in meta_text else "匿名作者"
-                year = meta_text.split(" - ")[-1].split()[0] if " - " in meta_text else "N/A"
+                author_parts = meta_text.split(" - ")
+                author = author_parts[0] if author_parts and author_parts[0].strip() else "匿名作者"
+                year = author_parts[-1].split()[0] if author_parts and len(author_parts[-1].split()) > 0 else "N/A"
 
                 # 機構
-                institution = meta_text.split(" - ")[1] if len(meta_text.split(" - ")) > 1 else "N/A"
+                institution = author_parts[1] if len(author_parts) > 1 else "N/A"
 
                 results.append({
                     "序號": idx,
@@ -147,9 +148,11 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
 
                 # 顯示結果 (APA 格式)
                 for paper in results:
-                    apa_citation = f"{paper['作者']} ({paper['年份']}).
-
-                    {paper['標題']} [碩士論文，{paper['機構']}]. 臺灣博碩士論文知識加值系統. {paper['連結']}"
+                    apa_citation = (
+                        f"{paper['作者']} ({paper['年份']}).
+                        {paper['標題']} [碩士論文，{paper['機構']}]. "
+                        f"臺灣博碩士論文知識加值系統. {paper['連結']}"
+                    )
                     with st.expander(f"📄 {paper['序號']}. {paper['標題']}", expanded=True):
                         st.markdown(f"**APA 引用格式：** {apa_citation}")
                         st.divider()
