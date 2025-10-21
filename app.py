@@ -4,14 +4,6 @@ import random
 import time
 from fake_useragent import UserAgent
 
-# 代理伺服器池
-proxy_pool = [
-    "http://proxy1.com:8080",
-    "http://proxy2.com:8080",
-    "http://proxy3.com:8080",
-    # 添加更多的代理伺服器地址
-]
-
 # 用戶代理池
 user_agents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -20,10 +12,7 @@ user_agents = [
     # 添加更多的 User-Agent
 ]
 
-# 隨機選擇代理和 User-Agent
-def get_random_proxy():
-    return random.choice(proxy_pool)
-
+# 隨機選擇 User-Agent
 def get_random_user_agent():
     return random.choice(user_agents)
 
@@ -35,15 +24,9 @@ def fetch_google_scholar(keyword):
         "User-Agent": get_random_user_agent(),
     }
 
-    # 隨機選擇代理
-    proxies = {
-        "http": get_random_proxy(),
-        "https": get_random_proxy(),
-    }
-
     try:
         # 發送請求
-        response = requests.get(search_url, headers=headers, proxies=proxies, timeout=10)
+        response = requests.get(search_url, headers=headers, timeout=10)
         response.raise_for_status()  # 如果請求失敗，會拋出異常
         
         soup = BeautifulSoup(response.text, "html.parser")
