@@ -1,17 +1,21 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-import random
 import time
+import random
+import chromedriver_autoinstaller
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+
+# 自動下載並安裝適合的 ChromeDriver
+chromedriver_autoinstaller.install()
 
 # 設定 Chrome 驅動選項
 chrome_options = Options()
 chrome_options.add_argument("--headless")  # 無頭模式，不顯示瀏覽器視窗
 chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--no-sandbox")  # 某些平台需要此選項
 
 # 使用 ChromeDriver 啟動瀏覽器
-driver = webdriver.Chrome(executable_path='/path/to/chromedriver', options=chrome_options)
+driver = webdriver.Chrome(options=chrome_options)
 
 def fetch_google_scholar(keyword):
     search_url = f"https://scholar.google.com/scholar?q={keyword}"
@@ -39,7 +43,7 @@ def fetch_google_scholar(keyword):
                 "author": author_pub,
             })
             
-            # 隨機延遲
+            # 隨機延遲，增加延遲時間來模擬人類行為
             time.sleep(random.uniform(3, 6))
 
     except Exception as e:
