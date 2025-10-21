@@ -1,15 +1,9 @@
 import streamlit as st
-from scholarly import scholarly, ProxyGenerator
+from scholarly import scholarly
 import time
 
-# --- 在這個版本中，我們不再需要 Playwright，所以移除了所有相關的環境設定 ---
-# --- 同時，我們設定一個代理來提高穩定性 ---
-
-# 設定代理，這可以幫助避免被 Google 封鎖
-# Streamlit Cloud 讓我們可以免費使用，所以我們將其啟用
-pg = ProxyGenerator()
-success = pg.FreeProxies()
-scholarly.use_proxy(pg)
+# --- 在這個版本中，我們移除了有問題的代理伺服器設定 ---
+# --- 程式將使用更直接的方式進行網路請求 ---
 
 # 抓取 Google 學術搜尋結果的函數
 def fetch_google_scholar(keyword):
@@ -20,7 +14,6 @@ def fetch_google_scholar(keyword):
     results = []
     try:
         # --- 修正：根據 scholarly 最新版本，設定語言的方式 ---
-        # 我們不再將 language 參數直接傳入，而是在 scholarly 物件上設定
         scholarly.set_language('zh-TW')
         
         # search_pubs 會回傳一個產生器 (generator)
