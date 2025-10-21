@@ -1,39 +1,9 @@
 import streamlit as st
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
-import subprocess
-import sys
 import time
 
-# --- 自動安裝 Playwright 瀏覽器的設定區塊 ---
-
-@st.cache_resource
-def _install_playwright_core():
-    """核心安裝函式，會被快取。"""
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"], 
-            check=True,
-            capture_output=True,
-            text=True
-        )
-    except Exception as e:
-        raise RuntimeError(f"安裝 Playwright 瀏覽器失敗: {e}") from e
-
-def setup_environment():
-    """處理使用者介面的包裝函式。"""
-    try:
-        _install_playwright_core()
-    except Exception as e:
-        st.error(e)
-        st.stop()
-
-with st.spinner("正在設定執行環境，請稍候..."):
-    setup_environment()
-st.toast("✅ 環境設定完成！", icon="🎉")
-
-# --- 設定區塊結束 ---
-
+# --- 在本機執行時，不再需要複雜的環境設定 ---
 
 # 使用 Playwright 抓取學術文獻的函數
 def fetch_academic_papers(keyword):
@@ -41,16 +11,14 @@ def fetch_academic_papers(keyword):
     使用 Playwright 前往華藝線上圖書館，抓取文獻標題。
     如果失敗，會回傳螢幕截圖和 HTML 原始碼以供除錯。
     """
-    page = None # 將 page 變數提到 try 的外面
-    context = None
-    browser = None
+    page = None
     
     try:
         with sync_playwright() as p:
             st.info("1. 正在啟動瀏覽器...")
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
                 viewport={'width': 1280, 'height': 800}
             )
             page = context.new_page()
@@ -59,7 +27,7 @@ def fetch_academic_papers(keyword):
             st.info(f"2. 正在前往目標網址：{target_url}")
             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             
-            st.info("3. 正在尋找並點擊 Cookie 同意按鈕...")
+            st.info("3. 正在尋找 Cookie 同意按鈕...")
             try:
                 cookie_button_selector = 'a.cookie_btn:has-text("我同意")'
                 page.locator(cookie_button_selector).click(timeout=10000)
@@ -81,22 +49,20 @@ def fetch_academic_papers(keyword):
             return titles_text, None, None # 成功時回傳標題
             
     except PlaywrightTimeoutError:
-        st.error("頁面加載超時，已擷取當前畫面以供除錯。")
+        st.error("頁面加載超時。請確認您的 VPN 已連線。")
         screenshot_bytes = None
         html_content = ""
         try:
-            if page: # 確保 page 物件存在
+            if page:
                 screenshot_bytes = page.screenshot()
                 html_content = page.content()
         except Exception as screenshot_error:
             st.warning(f"擷取除錯資訊時發生額外錯誤: {screenshot_error}")
-        return [], screenshot_bytes, html_content # 失敗時回傳除錯資訊
+        return [], screenshot_bytes, html_content
 
     except Exception as e:
         st.error(f"抓取資料時發生未預期的錯誤：{e}")
         return [], None, None
-    
-    # with 區塊結束後，playwright 會自動清理 browser, context, page，無需手動關閉
 
 # Streamlit 應用主函數
 def main():
@@ -107,8 +73,6 @@ def main():
 
     if st.button('抓取學術文獻'):
         if keyword:
-            # 清空之前的除錯資訊
-            titles, screenshot, html = [], None, None 
             titles, screenshot, html = fetch_academic_papers(keyword)
             
             if titles:
@@ -119,7 +83,6 @@ def main():
             else:
                 st.warning("未能抓取到任何文獻。")
 
-            # 如果收到除錯資訊，就顯示出來
             if screenshot:
                 st.subheader("🕵️‍♂️ 除錯資訊：案發現場截圖")
                 st.image(screenshot, caption="這是爬蟲超時前看到的最後畫面")
