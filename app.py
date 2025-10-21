@@ -1,66 +1,63 @@
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
 import random
 import time
-from fake_useragent import UserAgent
 
-# 用戶代理池
-user_agents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edge/91.0.864.48",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/77.0.4054.172",
-    # 添加更多的 User-Agent
-]
+# 設定 Chrome 驅動選項
+chrome_options = Options()
+chrome_options.add_argument("--headless")  # 無頭模式，不顯示瀏覽器視窗
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--no-sandbox")
 
-# 隨機選擇 User-Agent
-def get_random_user_agent():
-    return random.choice(user_agents)
+# 使用 ChromeDriver 啟動瀏覽器
+driver = webdriver.Chrome(executable_path='/path/to/chromedriver', options=chrome_options)
 
-# 抓取 Google Scholar 搜尋結果
 def fetch_google_scholar(keyword):
     search_url = f"https://scholar.google.com/scholar?q={keyword}"
-    
-    headers = {
-        "User-Agent": get_random_user_agent(),
-    }
 
+    # 打開 Google Scholar
+    driver.get(search_url)
+
+    # 等待頁面加載
+    time.sleep(random.uniform(3, 6))  # 模擬人類行為，隨機延遲
+
+    # 搜尋結果
+    results = []
     try:
-        # 發送請求
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()  # 如果請求失敗，會拋出異常
+        # 擷取搜尋結果
+        papers = driver.find_elements(By.CLASS_NAME, "gs_ri")
         
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        results = []
-        for item in soup.find_all("div", class_="gs_ri"):
-            title = item.find("h3", class_="gs_rt").get_text()
-            link = item.find("h3", class_="gs_rt").find("a")["href"] if item.find("h3", class_="gs_rt").find("a") else "#"
-            author_pub = item.find("div", class_="gs_a").get_text()
-            publication = item.find("div", class_="gs_a").get_text()
+        for paper in papers:
+            title = paper.find_element(By.CLASS_NAME, "gs_rt").text
+            link = paper.find_element(By.CLASS_NAME, "gs_rt").find_element(By.TAG_NAME, "a").get_attribute("href")
+            author_pub = paper.find_element(By.CLASS_NAME, "gs_a").text
             
             results.append({
                 "title": title,
                 "link": link,
                 "author": author_pub,
-                "publication": publication
             })
+            
+            # 隨機延遲
+            time.sleep(random.uniform(3, 6))
 
-            # 隨機延遲，增加延遲時間來模擬人類行為
-            time.sleep(random.uniform(3, 6))  # 3到6秒的隨機延遲
-
-        return results, None
-    except requests.exceptions.RequestException as e:
-        return [], f"請求錯誤：{e}，請稍後再試。"
+    except Exception as e:
+        print(f"錯誤：{e}")
+    
+    return results
 
 # 範例使用：
 keyword = "人力資源"
-papers, error = fetch_google_scholar(keyword)
+papers = fetch_google_scholar(keyword)
 
 if papers:
     for i, paper in enumerate(papers, 1):
         print(f"{i}. {paper['title']} - {paper['link']}")
         print(f"作者: {paper['author']}")
-        print(f"發表於: {paper['publication']}")
         print("-" * 80)
 else:
-    print(f"發生錯誤: {error}")
+    print("未能抓取到文獻資料")
+
+# 關閉瀏覽器
+driver.quit()
