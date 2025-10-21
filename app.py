@@ -2,24 +2,20 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# 設定 Cookies（請將您的 Cookies 貼到這裡）
-cookies = {
-    'your_cookie_name': 'your_cookie_value',
-    # 根據您的 Cookie 內容填寫其他項目
-}
-
 # 根據關鍵字抓取文獻的函數
 def fetch_academic_papers(keyword):
     session = requests.Session()  # 創建一個會話
 
-    # 設定 Cookies 來模擬登錄
-    session.cookies.update(cookies)
+    # 設置 User-Agent 標頭來模擬瀏覽器請求
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
 
     # 華藝線上圖書館的搜尋頁面，根據關鍵字搜尋
     target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
     
-    # 發送 GET 請求
-    response = session.get(target_url)
+    # 發送 GET 請求，並添加 headers
+    response = session.get(target_url, headers=headers)
     response.encoding = 'utf-8'
     
     # 解析 HTML 內容
