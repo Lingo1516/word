@@ -1,33 +1,39 @@
 import streamlit as st
-import requests
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
+
+# 設置 Selenium 使用無頭模式（不打開瀏覽器視窗）
+def setup_driver():
+    options = Options()
+    options.add_argument("--headless")  # 不顯示瀏覽器
+    options.add_argument("--disable-gpu")
+    driver = webdriver.Chrome(options=options)
+    return driver
 
 # 根據關鍵字抓取文獻的函數
 def fetch_academic_papers(keyword):
-    session = requests.Session()  # 創建一個會話
-
-    # 設置 User-Agent 標頭來模擬瀏覽器請求
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    driver = setup_driver()
 
     # 華藝線上圖書館的搜尋頁面，根據關鍵字搜尋
     target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
-    
-    # 發送 GET 請求，並添加 headers
-    response = session.get(target_url, headers=headers)
-    response.encoding = 'utf-8'
+    driver.get(target_url)
 
-    # 打印出網頁的原始 HTML 內容來進行調試
-    st.write(response.text)  # 顯示 HTML 以查看是否正確返回
+    # 等待頁面加載完成，並抓取頁面內容
+    driver.implicitly_wait(10)  # 等待最大 10 秒
+
+    # 獲取頁面 HTML 內容
+    page_source = driver.page_source
+    driver.quit()  # 關閉瀏覽器
 
     # 解析 HTML 內容
-    soup = BeautifulSoup(response.text, 'html.parser')
+    soup = BeautifulSoup(page_source, 'html.parser')
 
     # 抓取文獻標題
     titles = soup.find_all('h3', class_='title')
     titles_text = [title.get_text() for title in titles]
-    
+
     # 返回文獻標題
     return titles_text
 
