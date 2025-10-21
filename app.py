@@ -2,9 +2,18 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
+# 設定 Cookies（請將您的 Cookies 貼到這裡）
+cookies = {
+    'your_cookie_name': 'your_cookie_value',
+    # 根據您的 Cookie 內容填寫其他項目
+}
+
 # 根據關鍵字抓取文獻的函數
 def fetch_academic_papers(keyword):
     session = requests.Session()  # 創建一個會話
+
+    # 設定 Cookies 來模擬登錄
+    session.cookies.update(cookies)
 
     # 華藝線上圖書館的搜尋頁面，根據關鍵字搜尋
     target_url = f'https://www.airitilibrary.com/advsearch?keyword={keyword}'
