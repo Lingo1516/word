@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 st.title("📚 NDLTD 台灣學術文獻搜尋")
-st.markdown("輸入關鍵字，搜尋台灣博碩士論文（更新至 2025 年 10 月 22 日）")
+st.markdown("輸入關鍵字，搜尋台灣博碩士論文（更新至 2025 年 10 月 22 日 01:34 CST）")
 
 # 初始化 session state 追蹤上次搜尋時間
 if 'last_search_time' not in st.session_state:
@@ -149,8 +149,8 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
                 # 顯示結果 (APA 格式)
                 for paper in results:
                     apa_citation = (
-                        f"{paper['作者']} ({paper['年份']}).
-                        {paper['標題']} [碩士論文，{paper['機構']}]. "
+                        f"{paper['作者']} ({paper['年份']}).\n"
+                        f"{paper['標題']} [碩士論文，{paper['機構']}]. "
                         f"臺灣博碩士論文知識加值系統. {paper['連結']}"
                     )
                     with st.expander(f"📄 {paper['序號']}. {paper['標題']}", expanded=True):
