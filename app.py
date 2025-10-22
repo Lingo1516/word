@@ -48,7 +48,7 @@ def fetch_from_crossref(doi):
         return None, None, None, None
 
 # ----------------------------------------------------------------------
-# 區塊 2：【★macOS 最終版★】使用 Selenium 進行網頁爬蟲
+# 區塊 2：【★Streamlit Cloud 版★】使用 Selenium 進行網頁爬蟲
 # ----------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
@@ -62,12 +62,12 @@ def scrape_with_selenium(doi):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     
-    # 【★ macOS 修改點 ★】
-    # 已填入您提供的 Homebrew 路徑
+    # 【★ Streamlit Cloud 修改點 ★】
+    # 使用 `packages.txt` 安裝後的標準 Linux 路徑
     try:
-        service = Service(executable_path="/opt/homebrew/bin/chromedriver") # <--- ★★★ 已修正 ★★★
+        service = Service(executable_path="/usr/bin/chromedriver") # <--- ★★★ 已修正為 Linux 路徑 ★★★
     except Exception as e:
-        st.error(f"錯誤：找不到 Chromedriver。請確認您的路徑 '/opt/homebrew/bin/chromedriver' 是否正確。錯誤訊息：{e}")
+        st.error(f"錯誤：找不到 Chromedriver。請確認您已在 GitHub 建立了 `packages.txt` 檔案。錯誤訊息：{e}")
         return None, "Chromedriver 未設定", None, None
     
     driver = None
@@ -197,7 +197,7 @@ def main():
                         label="📥 下載表格 (CSV)",
                         data=csv_data,
                         file_name="doi_fetch_results.csv",
-                        mime="text/csv",
+                        mime="text/csv,
                         use_container_width=True
                     )
                 else:
