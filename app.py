@@ -54,6 +54,13 @@ def main():
     # 關鍵字搜尋
     keyword = st.sidebar.text_input("關鍵字篩選（可搜尋標題、摘要等）")
     
+    # 新增：分頁控制
+    items_per_page = st.sidebar.selectbox(
+        "每頁顯示筆數",
+        options=[10, 25, 50, 100],
+        index=0  # 預設為每頁 10 筆
+    )
+
     # --- 資料篩選邏輯 ---
     filtered_df = df.copy()
     if selected_category != "所有分類":
@@ -67,8 +74,21 @@ def main():
     st.header(f"📊 篩選結果 ({total_results} 筆)")
 
     if not filtered_df.empty:
+        # --- 分頁邏輯 ---
+        if 'page' not in st.session_state:
+            st.session_state.page = 1
+        
+        total_pages = (total_results + items_per_page - 1) // items_per_page
+        
+        if st.session_state.page > total_pages:
+            st.session_state.page = 1
+            
+        start_index = (st.session_state.page - 1) * items_per_page
+        end_index = start_index + items_per_page
+        paginated_df = filtered_df.iloc[start_index:end_index]
+
         # --- 專業表格視圖 ---
-        st.dataframe(filtered_df, use_container_width=True, height=300)
+        st.dataframe(paginated_df, use_container_width=True, height=300)
         
         # --- 匯出功能 ---
         csv_data = filtered_df.to_csv(index=False).encode('utf-8-sig')
@@ -83,7 +103,7 @@ def main():
         
         st.subheader("📄 文獻詳細資料與引用")
         # --- APA 格式產生器與詳細資料 ---
-        for index, paper in filtered_df.iterrows():
+        for index, paper in paginated_df.iterrows():
             apa_citation = (
                 f"{paper.get('author', 'N/A')} ({paper.get('year', 'N/A')}). "
                 f"*{paper.get('title', 'N/A')}* "
@@ -102,6 +122,26 @@ def main():
                 
                 st.markdown("**APA 7 引用格式:**")
                 st.code(apa_citation, language='text')
+
+        # --- 頁面導覽按鈕 ---
+        st.divider()
+        col1, col2, col3 = st.columns([2, 3, 2])
+        
+        with col1:
+            if st.session_state.page > 1:
+                if st.button("⬅️ 上一頁", use_container_width=True):
+                    st.session_state.page -= 1
+                    st.rerun()
+
+        with col2:
+            st.markdown(f"<div style='text-align: center;'><b>第 {st.session_state.page} 頁 / 共 {total_pages} 頁</b></div>", unsafe_allow_html=True)
+
+        with col3:
+            if st.session_state.page < total_pages:
+                if st.button("下一頁 ➡️", use_container_width=True):
+                    st.session_state.page += 1
+                    st.rerun()
+
     else:
         st.warning("找不到符合條件的文獻。請調整您的篩選條件。")
 
