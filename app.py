@@ -48,7 +48,7 @@ def fetch_from_crossref(doi):
         return None, None, None, None
 
 # ----------------------------------------------------------------------
-# 區塊 2：【★macOS 版★】使用 Selenium 進行網頁爬蟲
+# 區塊 2：【★macOS 最終版★】使用 Selenium 進行網頁爬蟲
 # ----------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
@@ -63,8 +63,12 @@ def scrape_with_selenium(doi):
     options.add_argument("--disable-gpu")
     
     # 【★ macOS 修改點 ★】
-    # 讓 Selenium 自動在系統 PATH 中尋找 (Homebrew 已設定好)
-    service = Service() 
+    # 已填入您提供的 Homebrew 路徑
+    try:
+        service = Service(executable_path="/opt/homebrew/bin/chromedriver") # <--- ★★★ 已修正 ★★★
+    except Exception as e:
+        st.error(f"錯誤：找不到 Chromedriver。請確認您的路徑 '/opt/homebrew/bin/chromedriver' 是否正確。錯誤訊息：{e}")
+        return None, "Chromedriver 未設定", None, None
     
     driver = None
     try:
