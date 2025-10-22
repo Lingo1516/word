@@ -65,7 +65,7 @@ def scrape_with_selenium(doi):
     # 【★ Streamlit Cloud 修改點 ★】
     # 使用 `packages.txt` 安裝後的標準 Linux 路徑
     try:
-        service = Service(executable_path="/usr/bin/chromedriver") # <--- ★★★ 已修正為 Linux 路徑 ★★★
+        service = Service(executable_path="/usr/bin/chromedriver") # <--- 使用 Linux 路徑
     except Exception as e:
         st.error(f"錯誤：找不到 Chromedriver。請確認您已在 GitHub 建立了 `packages.txt` 檔案。錯誤訊息：{e}")
         return None, "Chromedriver 未設定", None, None
@@ -197,7 +197,7 @@ def main():
                         label="📥 下載表格 (CSV)",
                         data=csv_data,
                         file_name="doi_fetch_results.csv",
-                        mime="text/csv,
+                        mime="text/csv", # <--- ★★★ 已經修正 ★★★
                         use_container_width=True
                     )
                 else:
