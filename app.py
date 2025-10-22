@@ -87,4 +87,6 @@ def scrape_from_doi_website(doi):
         if author_tags:
             authors = ', '.join([tag.get('content', '').strip() for tag in author_tags])
         else:
-            authors = '[作者抓取失敗
+            authors = '[作者抓取失敗]' # <-- 錯誤在這裡，請確保有結尾的 '
+
+        # --- 4.
