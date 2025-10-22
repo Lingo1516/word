@@ -95,4 +95,104 @@ def scrape_from_doi_website(doi):
         if year_tag:
             date_str = year_tag.get('content', '').strip()
             # 使用正則表達式從日期字串中抓取四位數年份 (例如 "2021/07/01" 或 "2021")
-            match = re.search(r'\b(19[5-9]\d|20[0-4]\d|2050)\
+            match = re.search(r'\b(19[5-9]\d|20[0-4]\d|2050)\b', date_str) # <--- 完整、正確的程式碼在這裡
+            year = match.group(0) if match else date_str
+        else:
+            year = '[年份抓取失敗]'
+            
+        return title, abstract, authors, year
+            
+    except requests.exceptions.RequestException as e:
+        return None, f"爬蟲網路錯誤：{e}", None, None
+    except Exception as e:
+        return None, f"爬蟲解析錯誤：{e}", None, None
+
+# ----------------------------------------------------------------------
+# 區塊 3：Streamlit 介面主體 (表格生成模式)
+# ----------------------------------------------------------------------
+
+def main():
+    st.set_page_config(layout="wide", page_title="即時文獻摘要查詢")
+    
+    st.title("📚 即時文獻摘要查詢 (Live DOI Fetcher)")
+    st.markdown("""
+    請貼上 DOI 列表。系統將自動擷取**作者、年份、標題、摘要**，並彙整成表格。
+    """)
+
+    with st.container(border=True):
+        
+        doi_input = st.text_area(
+            "請輸入 DOI (Digital Object Identifiers)，每行一個：",
+            placeholder="10.6342/NTU202100154 (試試這個，會啟動爬蟲)\n10.1038/nature12373 (試試這個，會使用API)"
+        )
+        
+        if st.button("🚀 開始擷取並製成表格", use_container_width=True, type="primary"):
+            if not doi_input:
+                st.warning("請輸入至少一個 DOI。")
+            else:
+                dois = [doi.strip() for doi in doi_input.split('\n') if doi.strip()]
+                
+                # 用於存放所有結果的列表
+                results_list = []
+                
+                with st.spinner(f"正在擷取 {len(dois)} 篇文獻資料..."):
+                    for doi in dois:
+                        
+                        # 【混合模式邏輯】
+                        # 1. 優先嘗試 API (方法 1)
+                        title, abstract, authors, year = fetch_from_crossref(doi)
+                        method = "API"
+                        
+                        # 2. 如果 API 失敗，啟動爬蟲 (方法 2)
+                        if title is None:
+                            title, abstract, authors, year = scrape_from_doi_website(doi)
+                            method = "爬蟲" # 標記為爬蟲
+                        
+                        # 3. 將結果存入字典
+                        result_data = {
+                            "DOI": doi,
+                            "Title": title if title else "[抓取失敗]",
+                            "Authors": authors if authors else "[抓取失敗]",
+                            "Year": year if year else "[抓取失敗]",
+                            "Abstract": abstract if abstract else "[抓取失敗]",
+                            "Fetch_Method": method
+                        }
+                        results_list.append(result_data)
+                                    
+                    st.success("全部擷取完畢！")
+
+                # --- 【新功能】將結果轉換為表格並顯示 ---
+                if results_list:
+                    st.header("📊 擷取結果表格")
+                    
+                    df = pd.DataFrame(results_list)
+                    
+                    # 重新排列表格欄位順序
+                    columns_order = ["Authors", "Year", "Title", "Abstract", "DOI", "Fetch_Method"]
+                    # 確保所有欄位都存在，避免 KeyErrors
+                    df_display_columns = [col for col in columns_order if col in df.columns]
+                    df_display = df[df_display_columns]
+
+                    st.dataframe(df_display, use_container_width=True)
+                    
+                    # --- 【新功能】提供下載按鈕 ---
+                    @st.cache_data
+                    def convert_df_to_csv(df_to_convert):
+                        # 轉為 CSV，使用 utf-8-sig 以確保 Excel 正確讀取中文
+                        return df_to_convert.to_csv(index=False).encode('utf-8-sig')
+
+                    csv_data = convert_df_to_csv(df_display)
+
+                    st.download_button(
+                        label="📥 下載表格 (CSV)",
+                        data=csv_data,
+                        file_name="doi_fetch_results.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                
+                else:
+                    st.error("所有 DOI 均查詢失敗，無法生成表格。")
+
+if __name__ == "__main__":
+    main()
