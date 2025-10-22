@@ -1,104 +1,158 @@
 import streamlit as st
 import requests  # 用於 API 請求
 import re        # 用於清理 HTML 標籤
+from bs4 import BeautifulSoup # 新增：用於網頁爬蟲
 
 # ----------------------------------------------------------------------
-# 區塊 1：DOI 摘要擷取函式 (與之前相同)
+# 區塊 1：API 查詢函式 (CrossRef)
 # ----------------------------------------------------------------------
 
 def clean_html(raw_html):
-    """移除 HTML 標籤"""
     cleantext = re.sub(r'<[^>]+>', '', raw_html)
     return cleantext
 
-@st.cache_data(show_spinner=False) # 快取查詢過的 DOI 結果，加快重複查詢速度
-def fetch_abstract_from_doi(doi):
-    """
-    使用 CrossRef API 透過 DOI 擷取摘要。
-    """
+@st.cache_data(show_spinner=False)
+def fetch_from_crossref(doi):
+    """(方法 1) 嘗試從 CrossRef API 擷取摘要"""
     try:
-        # 移除 DOI 網址前綴 (如果有的話)，只保留 DOI
         doi_id = doi.split('doi.org/')[-1]
-        
         url = f"https://api.crossref.org/works/{doi_id}"
         headers = {'Accept': 'application/json'}
-        
-        # 加上 timeout 以免卡住
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
             message = data.get('message', {})
-            
-            # 嘗試取得標題
             title = message.get('title', ['[標題不可用]'])[0]
-            
-            # 嘗試取得摘要
             abstract = message.get('abstract', '[摘要不可用]')
-            
-            # CrossRef 的摘要常包含 <jats:p>...</jats:p> 標籤，需要清理
             cleaned_abstract = clean_html(abstract)
             
+            # 如果摘要不是有效的，也視為失敗
+            if cleaned_abstract.startswith('['):
+                return None, None
+                
             return title, cleaned_abstract
         else:
-            # 【修改點】返回 None 和錯誤訊息
-            return None, f"API 錯誤：狀態碼 {response.status_code} (找不到摘要)"
+            return None, None # 404 或其他錯誤，代表 CrossRef 找不到
             
-    except requests.exceptions.RequestException as e:
-        return None, f"網路請求錯誤：{e}"
-    except Exception as e:
-        return None, f"處理時發生錯誤：{e}"
+    except Exception:
+        return None, None # 網路錯誤等
 
 # ----------------------------------------------------------------------
-# 區塊 2：Streamlit 介面主體 (已更新)
+# 區塊 2：網頁爬蟲函式 (適用華藝 Airiti 等)
+# ----------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def scrape_from_doi_website(doi):
+    """(方法 2) 模擬瀏覽器，直接爬取 DOI 轉址後的網頁"""
+    try:
+        doi_url = f"https://doi.org/{doi.split('doi.org/')[-1]}"
+        
+        # 模擬瀏覽器發出請求
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # requests 會自動跟隨轉址 (例如從 doi.org 轉到 airitilibrary.com)
+        response = requests.get(doi_url, headers=headers, timeout=15)
+        response.raise_for_status() # 確保請求成功
+        
+        # 使用 BeautifulSoup 解析 HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # --- 嘗試擷取標題 ---
+        # 優先找 'DC.Title' (華藝常用)
+        title_tag = soup.find("meta", attrs={"name": "DC.Title"})
+        if not title_tag:
+             # 備案：找 'og:title'
+            title_tag = soup.find("meta", property="og:title")
+        if not title_tag:
+            # 備案：找 HTML 的 <title>
+            title_tag = soup.find("title")
+            
+        title = title_tag.get('content', '標題抓取失敗').strip() if title_tag else soup.title.string.strip()
+        
+        # --- 嘗試擷取摘要 ---
+        # 優先找 'DC.Description' (華藝常用)
+        abstract_tag = soup.find("meta", attrs={"name": "DC.Description"})
+        if not abstract_tag:
+            # 備案：找 'description'
+            abstract_tag = soup.find("meta", attrs={"name": "description"})
+        if not abstract_tag:
+             # 備案：找 'og:description'
+            abstract_tag = soup.find("meta", property="og:description")
+
+        if abstract_tag:
+            abstract = abstract_tag.get('content', '[摘要抓取失敗]').strip()
+            # 避免抓到太短的描述
+            if len(abstract) < 50:
+                 return title, "[摘要內容過短，可能抓取錯誤]"
+            return title, abstract
+        else:
+            return title, "[無法在HTML中定位到摘要]"
+            
+    except requests.exceptions.RequestException as e:
+        return None, f"爬蟲網路錯誤：{e}"
+    except Exception as e:
+        return None, f"爬蟲解析錯誤：{e}"
+
+# ----------------------------------------------------------------------
+# 區塊 3：Streamlit 介面主體 (混合模式)
 # ----------------------------------------------------------------------
 
 def main():
-    # 網頁設定為寬螢幕模式
     st.set_page_config(layout="wide", page_title="即時文獻摘要查詢")
     
     st.title("📚 即時文獻摘要查詢 (Live DOI Fetcher)")
     st.markdown("""
-    在這裡貼上您想快速查詢的 DOI 列表，系統將透過 [CrossRef API](https://www.crossref.org/) 即時擷取摘要。
+    請貼上 DOI 列表。系統會優先使用 CrossRef API 查詢；若失敗，將自動啟動網頁爬蟲模式。
     """)
 
-    # --- 即時 DOI 查詢介面 ---
     with st.container(border=True):
         
         doi_input = st.text_area(
             "請輸入 DOI (Digital Object Identifiers)，每行一個：",
-            placeholder="10.6342/NTU202100154\n10.1038/nature12373"
+            placeholder="10.6342/NTU202100154 (試試這個，會啟動爬蟲)\n10.1038/nature12373 (試試這個，會使用API)"
         )
         
         if st.button("🚀 開始擷取摘要", use_container_width=True, type="primary"):
             if not doi_input:
                 st.warning("請輸入至少一個 DOI。")
             else:
-                # 解析輸入的 DOIs，去除空白
                 dois = [doi.strip() for doi in doi_input.split('\n') if doi.strip()]
                 
-                with st.spinner(f"正在擷取 {len(dois)} 篇文獻摘要，請稍候..."):
+                with st.spinner(f"正在擷取 {len(dois)} 篇文獻摘要..."):
                     for doi in dois:
-                        # 取得標題和摘要
-                        title, abstract = fetch_abstract_from_doi(doi)
                         
-                        # 標準化 DOI 連結
-                        doi_url = f"https://doi.org/{doi.split('doi.org/')[-1]}"
+                        # 【混合模式邏輯】
+                        # 1. 優先嘗試 API (方法 1)
+                        title, abstract = fetch_from_crossref(doi)
                         
-                        # 【★ 主要修改邏輯 ★】
+                        method = "API"
+                        
+                        # 2. 如果 API 失敗，啟動爬蟲 (方法 2)
                         if title is None:
-                            # 情況 1：抓取失敗 (例如華藝的 DOI)
-                            # 預設展開，顯示錯誤，並提供手動連結
-                            with st.expander(f"**[無法自動擷取]** (DOI: {doi})", expanded=True):
-                                st.error(abstract) # 顯示 "API 錯誤：狀態碼 404"
-                                st.info(f"這筆 DOI 可能來自學位論文（如華藝）。請點擊以下連結手動前往查看：\n[{doi_url}]({doi_url})")
+                            title, abstract = scrape_from_doi_website(doi)
+                            method = "爬蟲" # 標記為爬蟲
+                        
+                        # 3. 顯示結果
+                        if title is None and abstract is None:
+                            # 兩種方法都徹底失敗
+                            st.error(f"**DOI: {doi}**\n[查詢失敗] CrossRef API 和網頁爬蟲均無法取得資料。")
                         else:
-                            # 情況 2：抓取成功 (例如國際期刊)
-                            # 預設折疊，顯示標題和摘要
-                            with st.expander(f"**{title}** (DOI: {doi})", expanded=False):
-                                st.write(abstract)
-                                
+                            # 至少有一種方法成功了
+                            with st.expander(f"**{title}** (DOI: {doi}) [查詢方式: {method}]", expanded=False):
+                                if abstract.startswith('[') or '錯誤' in abstract:
+                                    st.error(abstract) # 顯示爬蟲或API的錯誤訊息
+                                else:
+                                    st.write(abstract) # 顯示摘要
+                                    
                     st.success("全部擷取完畢！")
 
-if __name__ == "__main__":
-    main()
+### 💡 重要提醒 (請務必閱讀)
+
+1.  **這是可行的**：這個方法現在可以處理您的華藝 DOI 了。
+2.  **但它很脆弱**：這個爬蟲是**「猜測」**摘要被放在 HTML 的 `<meta name="DC.Description">` 標籤裡。如果**明天華藝更新網站**，把標籤換了個名字，這個爬蟲就會**立刻失效**（又會抓不到摘要）。
+3.  **潛在風險**：如果短時間內用這個工具查詢太多次，華藝的網站可能會偵測到是程式在抓資料，進而**封鎖**您的 Streamlit App 的 IP 位址。
+
+總之，這個方法**可行**，但**不保證 100% 穩定**，因為我們是「強行」去別人的網站上抓資料，而不是透過對方同意的 API。
