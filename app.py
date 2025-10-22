@@ -87,6 +87,12 @@ def scrape_from_doi_website(doi):
         if author_tags:
             authors = ', '.join([tag.get('content', '').strip() for tag in author_tags])
         else:
-            authors = '[作者抓取失敗]' # <-- 錯誤在這裡，請確保有結尾的 '
+            authors = '[作者抓取失敗]'
 
-        # --- 4.
+        # --- 4. 嘗試擷取年份 ---
+        year_tag = soup.find("meta", attrs={"name": "DC.Date"})
+        if not year_tag: year_tag = soup.find("meta", attrs={"name": "citation_publication_date"})
+        if year_tag:
+            date_str = year_tag.get('content', '').strip()
+            # 使用正則表達式從日期字串中抓取四位數年份 (例如 "2021/07/01" 或 "2021")
+            match = re.search(r'\b(19[5-9]\d|20[0-4]\d|2050)\
