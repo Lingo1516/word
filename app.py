@@ -1,11 +1,17 @@
 import streamlit as st
 import requests  # 用於 API 請求
 import re        # 用於清理 HTML 標籤 和 擷取年份
-from bs4 import BeautifulSoup # 用於網頁爬蟲
-import pandas as pd # 新增：用於建立表格
+from bs4 import BeautifulSoup # 用於解析 HTML
+import pandas as pd # 用於建立表格
+import time      # 新增：用於等待頁面載入
+
+# --- 新增：Selenium 相關匯入 ---
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 # ----------------------------------------------------------------------
-# 區塊 1：API 查詢函式 (CrossRef) - 已升級
+# 區塊 1：API 查詢函式 (CrossRef) - (與之前相同)
 # ----------------------------------------------------------------------
 
 def clean_html(raw_html):
@@ -25,51 +31,59 @@ def fetch_from_crossref(doi):
         if response.status_code == 200:
             data = response.json()
             message = data.get('message', {})
-            
-            # 1. 取得標題
             title = message.get('title', ['[標題不可用]'])[0]
-            
-            # 2. 取得摘要
             abstract = clean_html(message.get('abstract', '[摘要不可用]'))
-            
-            # 3. 取得作者
             author_list = message.get('author', [])
             if author_list:
                 authors = ', '.join([f"{a.get('given', '')} {a.get('family', '')}".strip() for a in author_list])
             else:
                 authors = '[作者抓取失敗]'
-
-            # 4. 取得年份
             date_parts = message.get('created', {}).get('date-parts', [[None]])[0]
             year = date_parts[0] if (date_parts and date_parts[0]) else '[年份抓取失敗]'
-            
-            # 如果摘要不是有效的，也視為失敗
-            if abstract.startswith('['):
-                return None, None, None, None
-                
+            if abstract.startswith('['): return None, None, None, None
             return title, abstract, authors, year
         else:
-            return None, None, None, None # 404 或其他錯誤
-            
+            return None, None, None, None
     except Exception:
-        return None, None, None, None # 網路錯誤等
+        return None, None, None, None
 
 # ----------------------------------------------------------------------
-# 區塊 2：網頁爬蟲函式 (適用華藝 Airiti 等) - 已升級
+# 區塊 2：【★macOS 版★】使用 Selenium 進行網頁爬蟲
 # ----------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def scrape_from_doi_website(doi):
-    """(方法 2) 模擬瀏覽器，爬取 DOI 轉址後的網頁 (標題, 摘要, 作者, 年份)"""
+def scrape_with_selenium(doi):
+    """(方法 2) 使用 Selenium 模擬真人瀏覽器，爬取 DOI 轉址後的網頁"""
+    
+    # --- Selenium 設定 ---
+    options = Options()
+    options.add_argument("--headless")  # 無頭模式，不在畫面上顯示瀏覽器
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    
+    # 【★ macOS 修改點 ★】
+    # 讓 Selenium 自動在系統 PATH 中尋找 (Homebrew 已設定好)
+    service = Service() 
+    
+    driver = None
     try:
-        doi_url = f"https://doi.org/{doi.split('doi.org/')[-1]}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(doi_url, headers=headers, timeout=15)
-        response.raise_for_status() # 確保請求成功
+        # 啟動瀏覽器
+        driver = webdriver.Chrome(service=service, options=options)
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        doi_url = f"https://doi.org/{doi.split('doi.org/')[-1]}"
+        
+        # 瀏覽器前往該網址 (會自動轉址)
+        driver.get(doi_url)
+        
+        # 【關鍵】等待 3 秒，讓 JavaScript 有時間載入摘要
+        time.sleep(3) 
+        
+        # 取得「執行 JavaScript 後」的網頁原始碼
+        page_source = driver.page_source
+        
+        # --- 使用 BeautifulSoup 解析 (與之前相同) ---
+        soup = BeautifulSoup(page_source, 'html.parser')
         
         # --- 1. 嘗試擷取標題 ---
         title_tag = soup.find("meta", attrs={"name": "DC.Title"})
@@ -94,18 +108,19 @@ def scrape_from_doi_website(doi):
         if not year_tag: year_tag = soup.find("meta", attrs={"name": "citation_publication_date"})
         if year_tag:
             date_str = year_tag.get('content', '').strip()
-            # 使用正則表達式從日期字串中抓取四位數年份 (例如 "2021/07/01" 或 "2021")
-            match = re.search(r'\b(19[5-9]\d|20[0-4]\d|2050)\b', date_str) # <--- 完整、正確的程式碼在這裡
+            match = re.search(r'\b(19[5-9]\d|20[0-4]\d|2050)\b', date_str) 
             year = match.group(0) if match else date_str
         else:
             year = '[年份抓取失敗]'
             
         return title, abstract, authors, year
             
-    except requests.exceptions.RequestException as e:
-        return None, f"爬蟲網路錯誤：{e}", None, None
     except Exception as e:
-        return None, f"爬蟲解析錯誤：{e}", None, None
+        return None, f"爬蟲網路錯誤(Selenium)：{e}", None, None
+    finally:
+        # 無論如何都要關閉瀏覽器，否則會佔用記憶體
+        if driver:
+            driver.quit()
 
 # ----------------------------------------------------------------------
 # 區塊 3：Streamlit 介面主體 (表格生成模式)
@@ -117,36 +132,33 @@ def main():
     st.title("📚 即時文獻摘要查詢 (Live DOI Fetcher)")
     st.markdown("""
     請貼上 DOI 列表。系統將自動擷取**作者、年份、標題、摘要**，並彙整成表格。
+    (使用 Selenium 模擬瀏覽器，抓取 403 網站。**速度會比較慢，請耐心等候**。)
     """)
 
     with st.container(border=True):
         
         doi_input = st.text_area(
             "請輸入 DOI (Digital Object Identifiers)，每行一個：",
-            placeholder="10.6342/NTU202100154 (試試這個，會啟動爬蟲)\n10.1038/nature12373 (試試這個，會使用API)"
+            placeholder="10.6345/NTNU202200459 (試試這個，會啟動 Selenium 爬蟲)\n10.1038/nature12373 (試試這個，會使用 API)"
         )
         
-        if st.button("🚀 開始擷取並製成表格", use_container_width=True, type="primary"):
+        if st.button("🚀 開始擷取並製成表格 (慢速版)", use_container_width=True, type="primary"):
             if not doi_input:
                 st.warning("請輸入至少一個 DOI。")
             else:
                 dois = [doi.strip() for doi in doi_input.split('\n') if doi.strip()]
-                
-                # 用於存放所有結果的列表
                 results_list = []
                 
-                with st.spinner(f"正在擷取 {len(dois)} 篇文獻資料..."):
+                with st.spinner(f"正在使用 Selenium 模擬瀏覽器擷取 {len(dois)} 篇文獻... (這會需要一點時間)"):
                     for doi in dois:
-                        
-                        # 【混合模式邏輯】
                         # 1. 優先嘗試 API (方法 1)
                         title, abstract, authors, year = fetch_from_crossref(doi)
                         method = "API"
                         
-                        # 2. 如果 API 失敗，啟動爬蟲 (方法 2)
+                        # 2. 如果 API 失敗，啟動 Selenium (方法 2)
                         if title is None:
-                            title, abstract, authors, year = scrape_from_doi_website(doi)
-                            method = "爬蟲" # 標記為爬蟲
+                            title, abstract, authors, year = scrape_with_selenium(doi)
+                            method = "爬蟲 (Selenium)" # 標記
                         
                         # 3. 將結果存入字典
                         result_data = {
@@ -161,24 +173,18 @@ def main():
                                     
                     st.success("全部擷取完畢！")
 
-                # --- 【新功能】將結果轉換為表格並顯示 ---
+                # --- 顯示表格並提供下載 ---
                 if results_list:
                     st.header("📊 擷取結果表格")
-                    
                     df = pd.DataFrame(results_list)
-                    
-                    # 重新排列表格欄位順序
                     columns_order = ["Authors", "Year", "Title", "Abstract", "DOI", "Fetch_Method"]
-                    # 確保所有欄位都存在，避免 KeyErrors
                     df_display_columns = [col for col in columns_order if col in df.columns]
                     df_display = df[df_display_columns]
 
                     st.dataframe(df_display, use_container_width=True)
                     
-                    # --- 【新功能】提供下載按鈕 ---
                     @st.cache_data
                     def convert_df_to_csv(df_to_convert):
-                        # 轉為 CSV，使用 utf-8-sig 以確保 Excel 正確讀取中文
                         return df_to_convert.to_csv(index=False).encode('utf-8-sig')
 
                     csv_data = convert_df_to_csv(df_display)
@@ -190,7 +196,6 @@ def main():
                         mime="text/csv",
                         use_container_width=True
                     )
-                
                 else:
                     st.error("所有 DOI 均查詢失敗，無法生成表格。")
 
