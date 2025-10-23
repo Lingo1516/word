@@ -15,7 +15,12 @@ st.set_page_config(
 st.title("💡 國際學術文獻搜尋器 (Semantic Scholar API)")
 st.markdown("您可以選擇預設關鍵字或自行輸入 (以 AND 組合)，並設定年份範圍。")
 
-# --- 更新：預設商管關鍵字（包含中英文） ---
+# --- 設定冷卻時間（秒） ---
+COOLDOWN_SECONDS = 10
+if 'last_search_time' not in st.session_state:
+    st.session_state.last_search_time = 0
+
+# --- 預設商管關鍵字（包含中英文） ---
 BUSINESS_KEYWORDS_DICT = [
     {"en": "Management", "zh": "管理學"},
     {"en": "Marketing", "zh": "市場行銷"},
@@ -37,26 +42,21 @@ BUSINESS_KEYWORDS_DICT = [
 # --- 使用者輸入介面 ---
 st.subheader("請設定您的搜尋條件")
 
-# 關鍵字輸入區塊
 col_keyword1, col_keyword2 = st.columns([2, 1])
 with col_keyword1:
-    # 更新：使用 format_func 顯示中英文，但回傳值是英文
     selected_keyword_dicts = st.multiselect(
         "📚 選擇預設關鍵字 (可複選)",
-        options=BUSINESS_KEYWORDS_DICT, # 使用字典列表
-        format_func=lambda keyword_dict: f"{keyword_dict['en']} ({keyword_dict['zh']})", # 顯示格式
+        options=BUSINESS_KEYWORDS_DICT,
+        format_func=lambda keyword_dict: f"{keyword_dict['en']} ({keyword_dict['zh']})",
         default=[]
     )
-    # 從選擇的字典中提取英文字串
     selected_keywords_en = [k['en'] for k in selected_keyword_dicts]
-
 with col_keyword2:
     custom_keyword = st.text_input(
         "⌨️ 或輸入自訂關鍵字 (英文)",
         placeholder="例如：digital transformation"
     )
 
-# 年份篩選區塊
 current_year = datetime.now().year
 col_year1, col_year2, col_slider = st.columns([1, 1, 2])
 with col_year1:
@@ -66,40 +66,29 @@ with col_year2:
 with col_slider:
     max_results = st.slider("📈 最多顯示幾筆結果 (API 上限約 100)", min_value=5, max_value=100, value=20, step=5)
 
-
-# --- Semantic Scholar API 搜尋函數 ---
-@st.cache_data(ttl=3600) # 快取結果一小時
+# --- Semantic Scholar API 搜尋函數 (保持不變) ---
+@st.cache_data(ttl=3600)
 def search_semantic_scholar(query_list, start_year, end_year, limit=20):
-    """
-    使用 Semantic Scholar API 搜尋學術文獻。
-    query_list: 包含多個 **英文** 關鍵字的列表
-    """
-    # ... existing API call code ...
-    # 省略未變更的 API 呼叫函數內容
     base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
-
-    # 將所有關鍵字用空格連接，代表 AND 邏輯
     combined_query = " ".join(query_list)
     year_filter = f"{start_year}-{end_year}"
-
     params = {
-        'query': combined_query,
-        'year': year_filter,
-        'limit': limit,
+        'query': combined_query, 'year': year_filter, 'limit': limit,
         'fields': 'title,authors,year,abstract,venue,publicationVenue,journal,externalIds,url'
     }
-    headers = {
-        'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'
-    }
-
+    headers = {'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'}
     results = []
     error_message = None
 
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=30)
+        if response.status_code == 429:
+             retry_after = response.headers.get("Retry-After", COOLDOWN_SECONDS)
+             error_message = f"請求過於頻繁 (429)。請至少等待 {retry_after} 秒後再試。"
+             return results, error_message
+
         response.raise_for_status()
         data = response.json()
-
         papers = data.get('data', [])
 
         if papers:
@@ -107,7 +96,6 @@ def search_semantic_scholar(query_list, start_year, end_year, limit=20):
                 title = item.get('title', "N/A")
                 authors = ", ".join([author.get('name', 'N/A') for author in item.get('authors', [])]) or "N/A"
                 year = item.get('year', "N/A")
-                
                 journal_info = item.get('journal')
                 venue = item.get('venue') or item.get('publicationVenue', {}).get('name')
                 if journal_info and journal_info.get('name'):
@@ -116,13 +104,10 @@ def search_semantic_scholar(query_list, start_year, end_year, limit=20):
                      journal_venue = venue
                 else:
                     journal_venue = "N/A"
-                    
                 doi = item.get('externalIds', {}).get('DOI', "N/A")
                 doi_url = f"https://doi.org/{doi}" if doi != "N/A" else item.get('url', '#')
-
                 abstract_raw = item.get('abstract', "摘要未提供")
                 abstract = ' '.join(abstract_raw.split()) if abstract_raw and abstract_raw != "摘要未提供" else abstract_raw
-
                 results.append({
                     "Title": title, "Authors": authors, "Year": year,
                     "Journal/Venue": journal_venue,
@@ -141,76 +126,85 @@ def search_semantic_scholar(query_list, start_year, end_year, limit=20):
         error_message = f"處理資料時發生未知錯誤：{e}"
 
     return results, error_message
-# --- 省略結束 ---
-
 
 # --- 搜尋按鈕與結果顯示 ---
 st.divider()
 
-if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
-    # 更新：組合英文關鍵字
-    final_query_list = selected_keywords_en + ([custom_keyword] if custom_keyword else [])
+# --- 新增：用於顯示冷卻狀態的 placeholder ---
+cooldown_placeholder = st.empty()
 
-    if not final_query_list:
-        st.error("❌ 請至少選擇或輸入一個關鍵字")
-    elif year_start > year_end:
-         st.error("❌ 起始年份不能晚於結束年份")
+search_button_clicked = st.button("🚀 開始搜尋", type="primary", use_container_width=True)
+
+if search_button_clicked:
+    current_time = time.time()
+    time_since_last_search = current_time - st.session_state.last_search_time
+    remaining_cooldown = COOLDOWN_SECONDS - time_since_last_search
+
+    # --- 更新：檢查冷卻時間並顯示倒數 ---
+    if remaining_cooldown > 0:
+        cooldown_placeholder.error(f"❌ 搜尋過於頻繁，請等待 {int(remaining_cooldown) + 1} 秒後再試。") # 加 1 讓顯示更友好
     else:
-        # 更新：顯示組合的英文關鍵字
-        search_term_display = " & ".join(final_query_list)
-        year_range_display = f" ({year_start}-{year_end})"
-        with st.spinner(f"🔍 正在搜尋「{search_term_display}」{year_range_display}..."):
-            results, error = search_semantic_scholar(final_query_list, year_start, year_end, max_results)
+        # 清空冷卻提示
+        cooldown_placeholder.empty()
 
-        # ... existing results display code ...
-        # 省略未變更的結果顯示區塊
-        if error:
-            st.error(f"❌ {error}")
-        elif not results:
-            st.warning("⚠️ 找不到相關文獻")
+        final_query_list = selected_keywords_en + ([custom_keyword] if custom_keyword else [])
+        if not final_query_list:
+            st.error("❌ 請至少選擇或輸入一個關鍵字")
+        elif year_start > year_end:
+             st.error("❌ 起始年份不能晚於結束年份")
         else:
-            st.success(f"✅ 成功找到 {len(results)} 筆文獻！")
+            # 更新上次搜尋時間
+            st.session_state.last_search_time = current_time
 
-            df_results = pd.DataFrame(results)
-            display_columns = ["Title", "Authors", "Year", "Journal/Venue", "DOI"]
-            st.dataframe(df_results[display_columns], use_container_width=True, height=300)
+            search_term_display = " & ".join(final_query_list)
+            year_range_display = f" ({year_start}-{year_end})"
+            with st.spinner(f"🔍 正在搜尋「{search_term_display}」{year_range_display}..."):
+                results, error = search_semantic_scholar(final_query_list, year_start, year_end, max_results)
 
-            # --- 匯出功能 (包含摘要) ---
-            st.sidebar.header("💾 匯出結果")
-            csv_data = df_results.to_csv(index=False).encode('utf-8-sig')
-            st.sidebar.download_button(
-                label="📥 下載 CSV 檔案 (含摘要)",
-                data=csv_data,
-                file_name=f"semantic_scholar_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                type="primary"
-            )
+            if error:
+                st.error(f"❌ {error}")
+                 # 如果是 429 錯誤，也顯示在主區域
+                if "429" in error:
+                    cooldown_placeholder.error(f"❌ {error}") # 在 placeholder 顯示 429
+            elif not results:
+                st.warning("⚠️ 找不到相關文獻")
+            else:
+                st.success(f"✅ 成功找到 {len(results)} 筆文獻！")
+                df_results = pd.DataFrame(results)
+                display_columns = ["Title", "Authors", "Year", "Journal/Venue", "DOI"]
+                st.dataframe(df_results[display_columns], use_container_width=True, height=300)
 
-            # --- 顯示詳細資料與摘要 ---
-            st.subheader("📄 文獻詳細資料與摘要")
-            for i, paper in enumerate(results):
-                apa_citation = f"{paper['Authors']} ({paper['Year']}). {paper['Title']}. *{paper['Journal/Venue']}*. {paper['Link']}"
-                with st.expander(f"**{i+1}. {paper['Title']}** ({paper['Year']})", expanded=(i < 3)):
-                    st.markdown(f"**作者:** {paper['Authors']}")
-                    st.markdown(f"**發表於:** *{paper['Journal/Venue']}*")
-                    st.markdown(f"**DOI:** [{paper['DOI']}]({paper['Link']})")
+                st.sidebar.header("💾 匯出結果")
+                csv_data = df_results.to_csv(index=False).encode('utf-8-sig')
+                st.sidebar.download_button(
+                    label="📥 下載 CSV 檔案 (含摘要)",
+                    data=csv_data,
+                    file_name=f"semantic_scholar_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    type="primary"
+                )
 
-                    st.markdown("**摘要:**")
-                    if paper['Abstract'] != "摘要未提供" and paper['Abstract'] is not None:
-                        st.text_area(f"摘要_{i}", paper['Abstract'], height=150, disabled=True, label_visibility="collapsed")
-                    else:
-                        st.caption("摘要未提供")
-
-                    st.markdown("**APA 7 引用格式 (參考):**")
-                    st.code(apa_citation, language='text')
-        # --- 省略結束 ---
-
+                st.subheader("📄 文獻詳細資料與摘要")
+                for i, paper in enumerate(results):
+                    apa_citation = f"{paper['Authors']} ({paper['Year']}). {paper['Title']}. *{paper['Journal/Venue']}*. {paper['Link']}"
+                    with st.expander(f"**{i+1}. {paper['Title']}** ({paper['Year']})", expanded=(i < 3)):
+                        st.markdown(f"**作者:** {paper['Authors']}")
+                        st.markdown(f"**發表於:** *{paper['Journal/Venue']}*")
+                        st.markdown(f"**DOI:** [{paper['DOI']}]({paper['Link']})")
+                        st.markdown("**摘要:**")
+                        if paper['Abstract'] != "摘要未提供" and paper['Abstract'] is not None:
+                            st.text_area(f"摘要_{i}", paper['Abstract'], height=150, disabled=True, label_visibility="collapsed")
+                        else:
+                            st.caption("摘要未提供")
+                        st.markdown("**APA 7 引用格式 (參考):**")
+                        st.code(apa_citation, language='text')
 
 # --- 側邊欄說明 ---
 with st.sidebar:
     st.header("📖 使用說明")
-    st.markdown("""
+    # 更新說明文字
+    st.markdown(f"""
     ### ✨ 功能特色
     - 🌍 即時搜尋 **Semantic Scholar** 國際學術資料庫
     - 📚 提供 **15 個**常用商管關鍵字 (含中文)
@@ -222,9 +216,9 @@ with st.sidebar:
     - 📄 提供 APA 格式範例
 
     ### ⚠️ 注意事項
-    - 搜尋時仍需使用**英文**關鍵字進行 API 查詢。
-    - Semantic Scholar API **強烈建議**提供摘要。
-    - 年份篩選是建議值，API 可能返回部分超出範圍的結果。
+    - 為避免觸發 API 流量限制，每次搜尋需間隔 **{COOLDOWN_SECONDS} 秒**。應用程式會提示剩餘等待時間。
+    - 若多人同時使用，仍可能遇到 API 限制 (429 錯誤)，請稍後再試。
+    - 摘要資訊不一定可用。
     """)
     st.divider()
     st.caption("Data retrieved via Semantic Scholar API.")
