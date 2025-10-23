@@ -50,3 +50,18 @@ def generate_paper():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+import streamlit as st
+
+def compose_paper_content(text):
+    # 您可復用先前的內容整理邏輯
+    return f"自動生成論文內容摘要:\n\n{text[:800]}"
+
+st.title("論文內容自動整理 Demo")
+input_text = st.text_area("請貼上論文全文或重點文字")
+if st.button('生成論文摘要'):
+    with st.spinner("生成中..."):
+        result = compose_paper_content(input_text)
+        st.subheader("自動生成內容")
+        st.write(result)
+
