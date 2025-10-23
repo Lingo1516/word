@@ -7,16 +7,17 @@ import re # 用於清理摘要中的特殊字元
 
 # 頁面設定
 st.set_page_config(
-    page_title="國際學術文獻搜尋器 (Semantic Scholar API)",
-    page_icon="💡",
+    page_title="國際學術文獻搜尋器 (OpenAlex API)",
+    page_icon="✨",
     layout="wide"
 )
 
-st.title("💡 國際學術文獻搜尋器 (Semantic Scholar API)")
-st.markdown("您可以選擇預設關鍵字或自行輸入 (以 AND 組合)，並設定年份範圍。")
+st.title("✨ 國際學術文獻搜尋器 (OpenAlex API)")
+st.markdown("輸入英文關鍵字，即可透過 OpenAlex API 即時搜尋國際學術文獻（摘要提供率高）。")
 
 # --- 設定冷卻時間（秒） ---
-COOLDOWN_SECONDS = 15 # 稍微延長冷卻時間
+# OpenAlex 的免費 polite pool 建議每秒不超過 10 次請求，設 2 秒應該足夠
+COOLDOWN_SECONDS = 2
 if 'last_search_time' not in st.session_state:
     st.session_state.last_search_time = 0
 
@@ -64,68 +65,109 @@ with col_year1:
 with col_year2:
     year_end = st.number_input("⌛ 結束年份", min_value=1980, max_value=current_year, value=current_year)
 with col_slider:
-    max_results = st.slider("📈 最多顯示幾筆結果 (API 上限約 100)", min_value=5, max_value=100, value=20, step=5)
+    max_results = st.slider("📈 最多顯示幾筆結果 (API 上限 200)", min_value=5, max_value=50, value=20, step=5) # OpenAlex 每頁最多 200，但預設顯示 50
 
-# --- Semantic Scholar API 搜尋函數 (保持不變) ---
-@st.cache_data(ttl=3600)
-def search_semantic_scholar(query_list, start_year, end_year, limit=20):
-    # ... (省略未變更的 API 呼叫函數內容) ...
-    base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
+# --- OpenAlex API 搜尋函數 ---
+@st.cache_data(ttl=3600) # 快取結果一小時
+def search_openalex(query_list, start_year, end_year, per_page=20):
+    """
+    使用 OpenAlex API 搜尋學術文獻。
+    """
+    base_url = "https://api.openalex.org/works"
+    
+    # 組合關鍵字
     combined_query = " ".join(query_list)
-    year_filter = f"{start_year}-{end_year}"
+    
+    # OpenAlex 的 filter 語法
+    filters = [f"publication_year:{start_year}-{end_year}"]
+    # 可以考慮加入語言過濾，例如 'language:en'
+    # filters.append('language:en')
+    
     params = {
-        'query': combined_query, 'year': year_filter, 'limit': limit,
-        'fields': 'title,authors,year,abstract,venue,publicationVenue,journal,externalIds,url'
+        'search': combined_query,
+        'filter': ",".join(filters),
+        'per_page': per_page,
+        # OpenAlex 建議提供 email 以便他們聯繫（放入 polite pool）
+        'mailto': 'streamlit.app.user@example.com',
+        # 選擇需要的欄位，包括摘要 (abstract_inverted_index)
+        'select': 'id,doi,title,display_name,publication_year,authorships,host_venue,primary_location,abstract_inverted_index,type'
     }
-    headers = {'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'}
+    headers = {
+        'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'
+    }
+
     results = []
     error_message = None
 
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=30)
-        if response.status_code == 429:
-             # 從 Header 讀取建議等待時間，若無則用預設值
-             # 將讀取到的字串轉為整數，若轉換失敗也用預設值
-             try:
-                 retry_after = int(response.headers.get("Retry-After", COOLDOWN_SECONDS))
-             except (ValueError, TypeError):
-                 retry_after = COOLDOWN_SECONDS
-             error_message = f"請求過於頻繁 (429)。API 建議等待 {retry_after} 秒後再試。"
+
+        # OpenAlex 遇到流量限制通常是 429 或 403
+        if response.status_code == 429 or response.status_code == 403:
+             retry_after = response.headers.get("Retry-After", COOLDOWN_SECONDS)
+             error_message = f"請求過於頻繁 ({response.status_code})。OpenAlex API 建議等待 {retry_after} 秒後再試。"
              return results, error_message
 
-        response.raise_for_status()
+        response.raise_for_status() # 其他錯誤碼則拋出例外
         data = response.json()
-        papers = data.get('data', [])
+        
+        papers = data.get('results', [])
 
         if papers:
             for item in papers:
-                title = item.get('title', "N/A")
-                authors = ", ".join([author.get('name', 'N/A') for author in item.get('authors', [])]) or "N/A"
-                year = item.get('year', "N/A")
-                journal_info = item.get('journal')
-                venue = item.get('venue') or item.get('publicationVenue', {}).get('name')
-                if journal_info and journal_info.get('name'):
-                    journal_venue = journal_info.get('name')
-                elif venue:
-                     journal_venue = venue
-                else:
-                    journal_venue = "N/A"
-                doi = item.get('externalIds', {}).get('DOI', "N/A")
-                doi_url = f"https://doi.org/{doi}" if doi != "N/A" else item.get('url', '#')
-                abstract_raw = item.get('abstract', "摘要未提供")
-                abstract = ' '.join(abstract_raw.split()) if abstract_raw and abstract_raw != "摘要未提供" else abstract_raw
+                title = item.get('display_name', item.get('title', "N/A")) # display_name 通常更好
+                
+                # 作者資訊結構不同
+                authors = ", ".join([author.get('author', {}).get('display_name', 'N/A')
+                                     for author in item.get('authorships', [])]) or "N/A"
+                                     
+                year = item.get('publication_year', "N/A")
+                
+                # 期刊/會議資訊
+                host_venue = item.get('host_venue', {})
+                journal_venue = host_venue.get('display_name', host_venue.get('publisher', "N/A"))
+                
+                # DOI 和連結
+                doi = item.get('doi', None)
+                doi_url = doi if doi else item.get('id', '#') # 如果沒 DOI，用 OpenAlex ID 連結 (非直接論文連結)
+                
+                doc_type = item.get('type', 'N/A').replace('-', ' ').title()
+
+                # --- 處理 OpenAlex 的摘要 (Abstract Inverted Index) ---
+                abstract_inverted = item.get('abstract_inverted_index')
+                abstract = "摘要未提供"
+                if abstract_inverted:
+                    try:
+                        # 重建摘要：根據 index 排序並組合 word
+                        word_index = {}
+                        for word, indices in abstract_inverted.items():
+                            for index in indices:
+                                word_index[index] = word
+                        
+                        sorted_indices = sorted(word_index.keys())
+                        abstract_words = [word_index[i] for i in sorted_indices]
+                        abstract = " ".join(abstract_words)
+                        # 簡單清理可能的標點符號問題
+                        abstract = abstract.replace(" .", ".").replace(" ,", ",")
+                    except Exception:
+                        abstract = "摘要解析錯誤" # 如果重建失敗
+                # --- 摘要處理結束 ---
+
                 results.append({
                     "Title": title, "Authors": authors, "Year": year,
                     "Journal/Venue": journal_venue,
-                    "DOI": doi, "Link": doi_url, "Abstract": abstract
+                    "DOI": doi.replace("https://doi.org/", "") if doi else "N/A", # 只顯示 DOI 本身
+                    "Link": doi_url,
+                    "Abstract": abstract
                 })
-        elif data.get('total', 0) == 0:
+        elif data.get('meta', {}).get('count', 0) == 0:
             error_message = "找不到符合條件的文獻。"
         else:
-             error_message = f"API 回應異常: {data.get('message', '未知錯誤')}"
+             error_message = f"API 回應異常: {data.get('error', '未知錯誤')}"
+
 
     except requests.exceptions.Timeout:
-        error_message = "連線 Semantic Scholar API 逾時，請稍後再試。"
+        error_message = "連線 OpenAlex API 逾時，請稍後再試。"
     except requests.exceptions.RequestException as e:
         error_message = f"API 請求錯誤：{e}"
     except Exception as e:
@@ -136,26 +178,20 @@ def search_semantic_scholar(query_list, start_year, end_year, limit=20):
 # --- 搜尋按鈕與結果顯示 ---
 st.divider()
 
-# --- 優化：持續顯示冷卻狀態 ---
+# --- 持續顯示冷卻狀態 ---
 current_time = time.time()
 time_since_last_search = current_time - st.session_state.last_search_time
 remaining_cooldown = COOLDOWN_SECONDS - time_since_last_search
 
-# 用於顯示冷卻/錯誤訊息的 placeholder
 status_placeholder = st.empty()
-
-# 判斷按鈕是否應啟用
 can_search = remaining_cooldown <= 0
 
 if not can_search:
-    # 如果在冷卻中，持續顯示提示訊息
     status_placeholder.warning(f"⏳ 冷卻中，請等待 {int(remaining_cooldown) + 1} 秒...")
 
-# 顯示搜尋按鈕，根據冷卻狀態決定是否禁用
 search_button_clicked = st.button("🚀 開始搜尋", type="primary", use_container_width=True, disabled=not can_search)
 
-if search_button_clicked and can_search: # 只有在可以搜尋且按鈕被點擊時才執行
-    # 清空之前的狀態提示
+if search_button_clicked and can_search:
     status_placeholder.empty()
 
     final_query_list = selected_keywords_en + ([custom_keyword] if custom_keyword else [])
@@ -164,16 +200,14 @@ if search_button_clicked and can_search: # 只有在可以搜尋且按鈕被點�
     elif year_start > year_end:
          st.error("❌ 起始年份不能晚於結束年份")
     else:
-        # 更新上次搜尋時間
-        st.session_state.last_search_time = time.time() # 用 time.time() 獲取當前時間
+        st.session_state.last_search_time = time.time()
 
         search_term_display = " & ".join(final_query_list)
         year_range_display = f" ({year_start}-{year_end})"
-        with st.spinner(f"🔍 正在搜尋「{search_term_display}」{year_range_display}..."):
-            results, error = search_semantic_scholar(final_query_list, year_start, year_end, max_results)
+        with st.spinner(f"🔍 正在透過 OpenAlex API 搜尋「{search_term_display}」{year_range_display}..."):
+            results, error = search_openalex(final_query_list, year_start, year_end, max_results)
 
         if error:
-            # 將錯誤訊息顯示在 placeholder 區域
             status_placeholder.error(f"❌ {error}")
         elif not results:
             st.warning("⚠️ 找不到相關文獻")
@@ -181,7 +215,6 @@ if search_button_clicked and can_search: # 只有在可以搜尋且按鈕被點�
             st.success(f"✅ 成功找到 {len(results)} 筆文獻！")
             df_results = pd.DataFrame(results)
             display_columns = ["Title", "Authors", "Year", "Journal/Venue", "DOI"]
-            # 增加表格高度以顯示更多內容
             st.dataframe(df_results[display_columns], use_container_width=True, height=400)
 
             st.sidebar.header("💾 匯出結果")
@@ -189,25 +222,30 @@ if search_button_clicked and can_search: # 只有在可以搜尋且按鈕被點�
             st.sidebar.download_button(
                 label="📥 下載 CSV 檔案 (含摘要)",
                 data=csv_data,
-                file_name=f"semantic_scholar_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv",
+                file_name=f"openalex_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 use_container_width=True,
                 type="primary"
             )
 
             st.subheader("📄 文獻詳細資料與摘要")
-            # 預設展開筆數改為 5 筆
             for i, paper in enumerate(results):
+                # 簡化 APA 格式，因為 OpenAlex 提供的連結不一定是最終出版連結
                 apa_citation = f"{paper['Authors']} ({paper['Year']}). {paper['Title']}. *{paper['Journal/Venue']}*. {paper['Link']}"
-                with st.expander(f"**{i+1}. {paper['Title']}** ({paper['Year']})", expanded=(i < 5)): # 預設展開前五筆
+                with st.expander(f"**{i+1}. {paper['Title']}** ({paper['Year']})", expanded=(i < 5)):
                     st.markdown(f"**作者:** {paper['Authors']}")
                     st.markdown(f"**發表於:** *{paper['Journal/Venue']}*")
-                    st.markdown(f"**DOI:** [{paper['DOI']}]({paper['Link']})")
+                    st.markdown(f"**DOI:** {paper['DOI']}") # 直接顯示 DOI
+                    # 提供 OpenAlex 連結
+                    st.markdown(f"**OpenAlex Link:** {paper['Link']}")
+
+
                     st.markdown("**摘要:**")
-                    if paper['Abstract'] != "摘要未提供" and paper['Abstract'] is not None:
+                    if paper['Abstract'] != "摘要未提供" and paper['Abstract'] is not None and paper['Abstract'] != "摘要解析錯誤":
                         st.text_area(f"摘要_{i}", paper['Abstract'], height=150, disabled=True, label_visibility="collapsed")
                     else:
-                        st.caption("摘要未提供")
+                        st.caption(paper['Abstract']) # 顯示 "摘要未提供" 或 "摘要解析錯誤"
+
                     st.markdown("**APA 7 引用格式 (參考):**")
                     st.code(apa_citation, language='text')
 
@@ -216,7 +254,7 @@ with st.sidebar:
     st.header("📖 使用說明")
     st.markdown(f"""
     ### ✨ 功能特色
-    - 🌍 即時搜尋 **Semantic Scholar** 國際學術資料庫
+    - 🌍 即時搜尋 **OpenAlex** 國際學術大數據庫
     - 📚 提供 **15 個**常用商管關鍵字 (含中文)
     - ➕ 支援**複選**與**自訂**關鍵字 (AND 邏輯)
     - 📅 **年份範圍**篩選
@@ -226,12 +264,12 @@ with st.sidebar:
     - 📄 提供 APA 格式範例
 
     ### ⚠️ 注意事項
-    - 為避免觸發 API 流量限制，每次搜尋需間隔 **{COOLDOWN_SECONDS} 秒**。應用程式會提示剩餘等待時間，並暫時禁用搜尋按鈕。
-    - 若多人同時使用，仍可能遇到 API 限制 (429 錯誤)，請稍後再試。
-    - 摘要資訊不一定可用。
+    - OpenAlex 的免費 polite pool 有流量限制 (約 10次/秒)，已加入 **{COOLDOWN_SECONDS} 秒**冷卻。若遇 429/403 錯誤請稍候。
+    - 摘要資訊由 OpenAlex 提供，不保證所有文獻皆有。
+    - 建議註冊 OpenAlex email 以獲得更好的服務品質。
     """)
     st.divider()
-    st.caption("Data retrieved via Semantic Scholar API.")
+    st.caption("Data retrieved via OpenAlex API.")
 
 # 頁尾
 st.divider()
