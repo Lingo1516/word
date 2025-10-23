@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 import xml.etree.ElementTree as ET # ArXiv 和 PubMed 需要
 import re # 用於清理摘要
+import json # 用於處理 Gemini API 回應
 
 # --- 頁面設定 ---
 st.set_page_config(
@@ -14,16 +15,15 @@ st.set_page_config(
 )
 
 st.title("🚀 多平台學術文獻搜尋平台")
-st.markdown("同時搜尋 Semantic Scholar, arXiv, PubMed，並整合去重結果。")
+st.markdown("同時搜尋 Semantic Scholar, arXiv, PubMed，提供摘要與標題中文翻譯，並整合去重結果。")
 
 # --- 設定冷卻時間（秒） ---
-COOLDOWN_SECONDS = 5 # 稍微縮短冷卻，因為是多個 API 分散請求
+COOLDOWN_SECONDS = 5
 if 'last_search_time' not in st.session_state:
     st.session_state.last_search_time = 0
 
 # --- 預設商管關鍵字（包含中英文） ---
 BUSINESS_KEYWORDS_DICT = [
-    # ... (省略之前的關鍵字列表) ...
      {"en": "Management", "zh": "管理學"},
     {"en": "Marketing", "zh": "市場行銷"},
     {"en": "Finance", "zh": "財務金融"},
@@ -41,9 +41,60 @@ BUSINESS_KEYWORDS_DICT = [
     {"en": "Organizational Behavior", "zh": "組織行為"}
 ]
 
+# --- 翻譯函數 (使用 Gemini API) ---
+@st.cache_data(ttl=86400) # 快取翻譯結果一天
+def translate_text(text_to_translate, context="abstract"):
+    """使用 Gemini API 將英文文本翻譯成繁體中文"""
+    if not text_to_translate or text_to_translate in ["摘要未提供", "N/A", ""]:
+        return text_to_translate # 如果沒有內容，直接回傳
+
+    api_key = "" # API Key 由 Canvas 環境提供
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
+
+    # 根據翻譯內容調整提示
+    if context == "title":
+        prompt = f"Please translate the following English paper title into Traditional Chinese (zh-TW). Respond only with the translated title:\n\n{text_to_translate}"
+    else: # 預設為摘要
+        prompt = f"Please translate the following English abstract into Traditional Chinese (zh-TW). Respond only with the translated text:\n\n{text_to_translate}"
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    headers = {'Content-Type': 'application/json'}
+    max_retries = 3
+    base_delay = 1
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(api_url, headers=headers, json=payload, timeout=20)
+            response.raise_for_status()
+            result = response.json()
+            if (result.get('candidates') and
+                result['candidates'][0].get('content') and
+                result['candidates'][0]['content'].get('parts') and
+                result['candidates'][0]['content']['parts'][0].get('text')):
+                translated_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                # 簡單清理可能的 Markdown 或引號
+                translated_text = translated_text.replace('"', '').replace("'", "").replace('*', '')
+                return translated_text
+            else:
+                st.warning(f"翻譯 API ({context}) 回應格式異常: {result}")
+                return f"翻譯失敗(格式錯誤) - {context}"
+        except requests.exceptions.RequestException as e:
+            st.warning(f"翻譯 API ({context}) 請求失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt)) # 指數退避
+            else:
+                return f"翻譯失敗(請求錯誤) - {context}"
+        except Exception as e:
+             st.warning(f"翻譯 API ({context}) 發生未知錯誤: {e}")
+             return f"翻譯失敗(未知錯誤) - {context}"
+    return f"翻譯失敗(重試超限) - {context}" # 所有重試失敗
+
+
 # --- 使用者輸入介面 ---
 st.subheader("請設定您的搜尋條件")
-
+# ... (使用者輸入介面代碼保持不變) ...
 col_keyword1, col_keyword2 = st.columns([2, 1])
 with col_keyword1:
     selected_keyword_dicts = st.multiselect(
@@ -66,21 +117,21 @@ with col_year1:
 with col_year2:
     year_end = st.number_input("⌛ 結束年份", min_value=1980, max_value=current_year, value=current_year)
 with col_slider:
-    # 調整最大值，因為是多個來源合併
     max_results_per_source = st.slider("📈 **每個來源**最多顯示幾筆", min_value=5, max_value=30, value=10, step=5)
 
 
-# --- API 搜尋函數 (整合您的版本) ---
+# --- API 搜尋函數 ---
+# (Semantic Scholar, arXiv, PubMed 的搜尋函數保持不變，僅在返回的字典中增加原始 abstract 和 title 欄位)
 
 # Semantic Scholar API
 @st.cache_data(ttl=3600)
 def search_semantic_scholar(query, start_year, end_year, limit=10):
-    # ... (使用您提供的 Semantic Scholar 邏輯，並加入年份過濾) ...
+    # ... (省略 API 呼叫邏輯) ...
     base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
     year_filter = f"{start_year}-{end_year}"
     params = {
         'query': query, 'year': year_filter, 'limit': limit,
-        'fields': 'title,authors,year,abstract,venue,publicationVenue,journal,externalIds,url,keywords' # 嘗試獲取 keywords
+        'fields': 'title,authors,year,abstract,venue,publicationVenue,journal,externalIds,url,keywords'
     }
     headers = {'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'}
     papers = []
@@ -90,58 +141,46 @@ def search_semantic_scholar(query, start_year, end_year, limit=10):
         if resp.status_code == 429:
              retry_after = resp.headers.get("Retry-After", COOLDOWN_SECONDS)
              error_message = f"Semantic Scholar API 請求過頻 (429)，建議等待 {retry_after} 秒。"
-             return papers, error_message # 返回空列表和錯誤訊息
+             return papers, error_message
         resp.raise_for_status()
         data = resp.json()
         for p in data.get('data', []):
             author = "; ".join([a.get('name','') for a in p.get('authors',[])])
-            # 清理摘要
             abstract_raw = p.get('abstract','')
             abstract = ' '.join(abstract_raw.split()) if abstract_raw else ''
-            # 期刊/會議資訊
             journal_info = p.get('journal')
             venue = p.get('venue') or p.get('publicationVenue', {}).get('name')
-            if journal_info and journal_info.get('name'):
-                journal_venue = journal_info.get('name')
-            elif venue:
-                 journal_venue = venue
-            else:
-                journal_venue = "N/A"
-            # 關鍵字
+            journal_venue = venue if venue else (journal_info.get('name') if journal_info else "N/A")
             keywords_list = p.get('keywords', [])
             keywords_str = "; ".join(keywords_list) if keywords_list else ""
-            # DOI 和連結
             doi = p.get('externalIds', {}).get('DOI', "")
             link_url = f"https://doi.org/{doi}" if doi else p.get('url','')
+            title_en = p.get('title','') # 儲存原始英文標題
 
             papers.append({
-                'source': 'Semantic Scholar', # 標註來源
-                'title': p.get('title',''),
+                'source': 'Semantic Scholar',
+                'title_en': title_en, # 儲存英文標題
                 'author': author,
                 'year': p.get('year',''),
                 'publication': journal_venue,
                 'keywords': keywords_str,
-                'abstract': abstract,
+                'abstract_en': abstract, # 儲存英文摘要
                 'link': link_url
             })
-    except requests.exceptions.Timeout:
-        error_message = "連線 Semantic Scholar API 逾時。"
-    except requests.exceptions.RequestException as e:
-        error_message = f"Semantic Scholar API 請求錯誤: {e}"
-    except Exception as e:
-        error_message = f"處理 Semantic Scholar 資料時發生錯誤: {e}"
+    # ... (省略錯誤處理邏輯) ...
+    except requests.exceptions.Timeout: error_message = "連線 Semantic Scholar API 逾時。"
+    except requests.exceptions.RequestException as e: error_message = f"Semantic Scholar API 請求錯誤: {e}"
+    except Exception as e: error_message = f"處理 Semantic Scholar 資料時發生錯誤: {e}"
     return papers, error_message
 
 
 # arXiv API
 @st.cache_data(ttl=3600)
 def search_arxiv(query, start_year, end_year, max_results=10):
-    # ... (使用您提供的 arXiv 邏輯，加入年份過濾) ...
+    # ... (省略 API 呼叫邏輯) ...
     base_url = 'http://export.arxiv.org/api/query?'
-    # arXiv 的 query 格式比較特殊，需要用欄位指定
-    # 我們這裡簡單用 all: 包含關鍵字，並在後面用 Python 過濾年份
-    search_query = f'all:"{query}"' # 用引號包裹多詞關鍵字
-    params = f'search_query={search_query}&sortBy=submittedDate&sortOrder=descending&start=0&max_results={max_results * 5}' # 多抓幾筆來過濾年份
+    search_query = f'all:"{query}"'
+    params = f'search_query={search_query}&sortBy=submittedDate&sortOrder=descending&start=0&max_results={max_results * 5}'
     papers = []
     error_message = None
     try:
@@ -152,54 +191,45 @@ def search_arxiv(query, start_year, end_year, max_results=10):
         count = 0
         for entry in root.findall('arxiv:entry', ns):
             published_str = entry.find('arxiv:published', ns).text
-            year_match = re.search(r'^(\d{4})', published_str) # 提取年份
+            year_match = re.search(r'^(\d{4})', published_str)
             if year_match:
                 published_year = int(year_match.group(1))
-                # 進行年份過濾
                 if start_year <= published_year <= end_year:
-                    title = entry.find('arxiv:title', ns).text.strip() # 清理標題空白
+                    title_en = entry.find('arxiv:title', ns).text.strip() # 儲存原始英文標題
                     authors = entry.findall('arxiv:author/arxiv:name', ns)
                     author_names = "; ".join([a.text for a in authors])
-                    summary = entry.find('arxiv:summary', ns).text.strip() # 清理摘要空白
-                    link_pdf_tag = entry.find('arxiv:link[@title="pdf"]', ns) # 優先找 PDF 連結
-                    link_abs_tag = entry.find('arxiv:link[@rel="alternate"]', ns) # 備用找摘要頁連結
+                    summary = entry.find('arxiv:summary', ns).text.strip()
+                    link_pdf_tag = entry.find('arxiv:link[@title="pdf"]', ns)
+                    link_abs_tag = entry.find('arxiv:link[@rel="alternate"]', ns)
                     link_url = link_pdf_tag.attrib.get('href','') if link_pdf_tag is not None else (link_abs_tag.attrib.get('href','') if link_abs_tag is not None else '')
 
                     papers.append({
-                        'source': 'arXiv', # 標註來源
-                        'title': title,
+                        'source': 'arXiv',
+                        'title_en': title_en, # 儲存英文標題
                         'author': author_names,
                         'year': published_year,
-                        'publication': 'arXiv Preprint', # arXiv 都是預印本
-                        'keywords': '', # arXiv API 不直接提供關鍵字
-                        'abstract': summary,
+                        'publication': 'arXiv Preprint',
+                        'keywords': '',
+                        'abstract_en': summary, # 儲存英文摘要
                         'link': link_url
                     })
                     count += 1
-                    if count >= max_results: # 達到需要的筆數就停止
-                        break
-    except requests.exceptions.Timeout:
-        error_message = "連線 arXiv API 逾時。"
-    except requests.exceptions.RequestException as e:
-        error_message = f"arXiv API 請求錯誤: {e}"
-    except ET.ParseError:
-         error_message = "解析 arXiv 回應時發生錯誤。"
-    except Exception as e:
-        error_message = f"處理 arXiv 資料時發生錯誤: {e}"
+                    if count >= max_results: break
+    # ... (省略錯誤處理邏輯) ...
+    except requests.exceptions.Timeout: error_message = "連線 arXiv API 逾時。"
+    except requests.exceptions.RequestException as e: error_message = f"arXiv API 請求錯誤: {e}"
+    except ET.ParseError: error_message = "解析 arXiv 回應時發生錯誤。"
+    except Exception as e: error_message = f"處理 arXiv 資料時發生錯誤: {e}"
     return papers, error_message
 
 # PubMed API
 @st.cache_data(ttl=3600)
 def search_pubmed(query, start_year, end_year, max_results=10):
-    # ... (使用您提供的 PubMed 邏輯，加入年份過濾) ...
+    # ... (省略 API 呼叫邏輯) ...
     base_search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     base_fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-    # 加入年份範圍到搜尋詞
     term_with_year = f"{query} AND (\"{start_year}\"[Date - Publication] : \"{end_year}\"[Date - Publication])"
-    params_search = {
-        'db': 'pubmed', 'term': term_with_year, 'retmax': max_results,
-        'retmode': 'json', 'sort': 'relevance' # 按相關性排序
-    }
+    params_search = {'db': 'pubmed', 'term': term_with_year, 'retmax': max_results, 'retmode': 'json', 'sort': 'relevance'}
     papers = []
     error_message = None
     try:
@@ -214,53 +244,43 @@ def search_pubmed(query, start_year, end_year, max_results=10):
             root = ET.fromstring(fetch_resp.content)
             for article in root.findall(".//PubmedArticle"):
                 title = article.find(".//ArticleTitle")
-                title_text = title.text if title is not None else ''
-                abstract = article.find(".//AbstractText")
-                # PubMed 可能有多個 AbstractText，合併它們
+                title_en = title.text if title is not None else '' # 儲存原始英文標題
                 abstract_parts = article.findall(".//AbstractText")
                 abstract_text = "\n".join([part.text for part in abstract_parts if part.text]) if abstract_parts else ''
                 authors = article.findall(".//Author")
                 author_names = []
                 for a in authors:
-                    last = a.find("LastName")
-                    first = a.find("ForeName") # PubMed 有時用 ForeName
-                    initials = a.find("Initials") # 有時只有縮寫
+                    last = a.find("LastName"); first = a.find("ForeName"); initials = a.find("Initials")
                     name = ""
                     if last is not None and last.text: name += last.text
                     if first is not None and first.text: name += ", " + first.text
-                    elif initials is not None and initials.text: name += ", " + initials.text # 備用縮寫
+                    elif initials is not None and initials.text: name += ", " + initials.text
                     if name.strip(): author_names.append(name.strip())
-
                 year = article.find(".//PubDate/Year")
-                medline_date = article.find(".//PubDate/MedlineDate") # 備用日期格式
+                medline_date = article.find(".//PubDate/MedlineDate")
                 year_text = year.text if year is not None else (medline_date.text[:4] if medline_date is not None else '')
-
-                journal = article.find(".//Title") # 期刊名稱在 Title
+                journal = article.find(".//Title")
                 journal_text = journal.text if journal is not None else ''
-
-                # PubMed ID 作為連結基礎
                 pmid = article.find(".//PMID")
                 link_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid.text}/" if pmid is not None else ''
 
                 papers.append({
-                    'source': 'PubMed', # 標註來源
-                    'title': title_text,
+                    'source': 'PubMed',
+                    'title_en': title_en, # 儲存英文標題
                     'author': "; ".join(author_names),
                     'year': year_text,
                     'publication': journal_text,
-                    'keywords': '', # PubMed API 不易直接獲取 Mesh Terms，暫時留空
-                    'abstract': abstract_text,
+                    'keywords': '',
+                    'abstract_en': abstract_text, # 儲存英文摘要
                     'link': link_url
                 })
-    except requests.exceptions.Timeout:
-        error_message = "連線 PubMed API 逾時。"
-    except requests.exceptions.RequestException as e:
-        error_message = f"PubMed API 請求錯誤: {e}"
-    except ET.ParseError:
-         error_message = "解析 PubMed 回應時發生錯誤。"
-    except Exception as e:
-        error_message = f"處理 PubMed 資料時發生錯誤: {e}"
+    # ... (省略錯誤處理邏輯) ...
+    except requests.exceptions.Timeout: error_message = "連線 PubMed API 逾時。"
+    except requests.exceptions.RequestException as e: error_message = f"PubMed API 請求錯誤: {e}"
+    except ET.ParseError: error_message = "解析 PubMed 回應時發生錯誤。"
+    except Exception as e: error_message = f"處理 PubMed 資料時發生錯誤: {e}"
     return papers, error_message
+
 
 # --- 主程式流程 ---
 st.divider()
@@ -286,55 +306,78 @@ if search_button_clicked and can_search:
          st.error("❌ 起始年份不能晚於結束年份")
     else:
         st.session_state.last_search_time = time.time()
-        search_term = " ".join(final_query_list) # 合併成單一查詢字串給各 API
+        search_term = " ".join(final_query_list)
         search_term_display = " & ".join(final_query_list)
         year_range_display = f" ({year_start}-{year_end})"
 
-        all_results = []
+        all_results_raw = []
         errors = []
+        api_funcs = {
+            "Semantic Scholar": search_semantic_scholar,
+            "arXiv": search_arxiv,
+            "PubMed": search_pubmed
+        }
+        api_progress = {}
 
-        with st.spinner(f"🔍 正在 Semantic Scholar 搜尋「{search_term_display}」{year_range_display}..."):
-            ss_results, ss_error = search_semantic_scholar(search_term, year_start, year_end, max_results_per_source)
-            if ss_error: errors.append(ss_error)
-            all_results.extend(ss_results)
+        # 使用 st.progress 來顯示進度
+        progress_bar = st.progress(0.0)
+        progress_text = st.empty()
+        total_apis = len(api_funcs)
 
-        with st.spinner(f"⏳ 正在 arXiv 搜尋「{search_term_display}」{year_range_display}..."):
-            arxiv_results, arxiv_error = search_arxiv(search_term, year_start, year_end, max_results_per_source)
-            if arxiv_error: errors.append(arxiv_error)
-            all_results.extend(arxiv_results)
+        for i, (api_name, api_func) in enumerate(api_funcs.items()):
+             progress_text.text(f"🔍 正在 {api_name} 搜尋...")
+             results, error = api_func(search_term, year_start, year_end, max_results_per_source)
+             if error: errors.append(error)
+             all_results_raw.extend(results)
+             progress_bar.progress((i + 1) / total_apis) # 更新進度條
 
-        with st.spinner(f"⚕️ 正在 PubMed 搜尋「{search_term_display}」{year_range_display}..."):
-            pubmed_results, pubmed_error = search_pubmed(search_term, year_start, year_end, max_results_per_source)
-            if pubmed_error: errors.append(pubmed_error)
-            all_results.extend(pubmed_results)
+        progress_text.text("🔄 正在整合與翻譯結果...") # 更新狀態
 
-        # 顯示 API 錯誤訊息 (如果有的話)
-        if errors:
-            st.error("⚠️ 部分 API 搜尋時發生錯誤：\n" + "\n".join([f"- {e}" for e in errors]))
-
-        if not all_results:
-            st.warning("⚠️ 在所有平台都找不到相關文獻")
+        if not all_results_raw:
+             progress_text.empty() # 清空進度提示
+             progress_bar.empty()
+             st.warning("⚠️ 在所有平台都找不到相關文獻")
+             if errors: st.error("⚠️ 部分 API 搜尋時發生錯誤：\n" + "\n".join([f"- {e}" for e in errors]))
         else:
-            df_raw = pd.DataFrame(all_results)
+            df_raw = pd.DataFrame(all_results_raw)
             # --- 去重 ---
-            # 優先保留 Semantic Scholar 的結果 (通常資訊較全)
             df_raw['source_priority'] = df_raw['source'].map({'Semantic Scholar': 1, 'arXiv': 2, 'PubMed': 3}).fillna(4)
-            # 根據標題(小寫)去重，保留 priority 最小的
-            df_raw['title_lower'] = df_raw['title'].str.lower().str.strip()
-            df_final = df_raw.sort_values('source_priority').drop_duplicates(subset=['title_lower'], keep='first').reset_index(drop=True)
-            # 移除輔助欄位
-            df_final = df_final.drop(columns=['source_priority', 'title_lower'])
+            df_raw['title_lower'] = df_raw['title_en'].str.lower().str.strip() # 使用英文標題去重
+            df_unique = df_raw.sort_values('source_priority').drop_duplicates(subset=['title_lower'], keep='first').reset_index(drop=True)
 
-            st.success(f"✅ 成功合併並去重後找到 {len(df_final)} 筆文獻！")
+            # --- 翻譯標題與摘要 ---
+            translated_data = []
+            total_to_translate = len(df_unique)
+            for i, paper in enumerate(df_unique.to_dict('records')):
+                progress_percentage = (i + 1) / total_to_translate
+                progress_text.text(f"翻譯中... ({i+1}/{total_to_translate}) - {paper['title_en'][:30]}...") # 顯示進度
+                # 執行翻譯
+                title_zh = translate_text(paper['title_en'], context="title")
+                abstract_zh = translate_text(paper['abstract_en'], context="abstract")
+                # 將翻譯結果加回字典
+                paper['title_zh'] = title_zh
+                paper['abstract_zh'] = abstract_zh
+                translated_data.append(paper)
+                progress_bar.progress(progress_percentage) # 更新進度條
 
-            display_columns = ["source", "title", "author", "year", "publication"]
+            df_final = pd.DataFrame(translated_data)
+            df_final = df_final.drop(columns=['source_priority', 'title_lower']) # 移除輔助欄位
+
+            progress_text.empty() # 清空進度提示
+            progress_bar.empty()
+
+            st.success(f"✅ 成功找到並翻譯 {len(df_final)} 筆文獻！")
+
+            # --- 更新：表格顯示中英文標題 ---
+            display_columns = ["source", "title_en", "title_zh", "author", "year", "publication"]
             st.dataframe(df_final[display_columns], use_container_width=True, height=400)
 
-            # --- 匯出功能 ---
+            # --- 匯出功能 (包含翻譯) ---
             st.sidebar.header("💾 匯出結果")
+            # 更新：匯出所有欄位
             csv_data = df_final.to_csv(index=False, encoding='utf-8-sig')
             st.sidebar.download_button(
-                label="📥 下載 CSV 檔案 (含摘要)",
+                label="📥 下載 CSV 檔案 (含翻譯)",
                 data=csv_data,
                 file_name=f"multi_api_search_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv",
                 mime="text/csv",
@@ -342,22 +385,38 @@ if search_button_clicked and can_search:
                 type="primary"
             )
 
-            # --- 顯示詳細資料與摘要 ---
-            st.subheader("📄 文獻詳細資料與摘要")
+            # --- 顯示詳細資料與摘要 (包含翻譯) ---
+            st.subheader("📄 文獻詳細資料、摘要與翻譯")
             for i, paper in df_final.iterrows():
-                # 簡化 APA，因為來源多樣
-                apa_citation = f"{paper.get('author','N/A')} ({paper.get('year','N/A')}). {paper.get('title','N/A')}. *{paper.get('publication','N/A')}*. {paper.get('link','#')}"
-                with st.expander(f"**{i+1}. {paper.get('title','N/A')}** ({paper.get('year','N/A')}) - _{paper.get('source','Unknown')}_", expanded=(i < 5)):
+                # 更新：顯示中英文標題
+                expander_title = f"**{i+1}. {paper.get('title_en','N/A')}** ({paper.get('year','N/A')}) - _{paper.get('source','Unknown')}_"
+                if paper.get('title_zh') and "翻譯失敗" not in paper['title_zh']:
+                     expander_title += f"\n   * {paper['title_zh']}" # 在標題下方顯示中文
+
+                apa_citation = f"{paper.get('author','N/A')} ({paper.get('year','N/A')}). {paper.get('title_en','N/A')}. *{paper.get('publication','N/A')}*. {paper.get('link','#')}"
+
+                with st.expander(expander_title, expanded=(i < 3)): # 預設展開前 3 筆
                     st.markdown(f"**作者:** {paper.get('author','N/A')}")
                     st.markdown(f"**發表於:** *{paper.get('publication','N/A')}*")
                     st.markdown(f"**連結:** {paper.get('link','#')}")
 
-                    st.markdown("**摘要:**")
-                    abstract_text = paper.get('abstract', '摘要未提供')
-                    if abstract_text:
-                        st.text_area(f"摘要_{i}", abstract_text, height=150, disabled=True, label_visibility="collapsed")
+                    st.markdown("**英文摘要:**")
+                    abstract_en = paper.get('abstract_en', '摘要未提供')
+                    if abstract_en:
+                        st.text_area(f"摘要_en_{i}", abstract_en, height=150, disabled=True, label_visibility="collapsed")
                     else:
                         st.caption("摘要未提供")
+
+                    st.markdown("**中文翻譯:**")
+                    abstract_zh = paper.get('abstract_zh', '摘要未提供')
+                    # 檢查是否翻譯失敗
+                    if abstract_zh and "翻譯失敗" not in abstract_zh:
+                        st.text_area(f"摘要_zh_{i}", abstract_zh, height=150, disabled=True, label_visibility="collapsed")
+                    elif abstract_zh and "翻譯失敗" in abstract_zh:
+                         st.warning(f"摘要翻譯失敗 ({abstract_zh.split('-')[-1].strip()})") # 顯示失敗原因
+                    else:
+                        st.caption("摘要未提供或無需翻譯")
+
 
                     st.markdown("**APA 7 引用格式 (參考):**")
                     st.code(apa_citation, language='text')
@@ -365,25 +424,27 @@ if search_button_clicked and can_search:
 # --- 側邊欄說明 ---
 with st.sidebar:
     st.header("📖 使用說明")
+    # 更新說明文字
     st.markdown(f"""
     ### ✨ 功能特色
     - 🌍 同時搜尋 **Semantic Scholar, arXiv, PubMed**
     - 📚 提供 **15 個**常用商管關鍵字 (含中文)
     - ➕ 支援**複選**與**自訂**關鍵字 (AND 邏輯)
     - 📅 **年份範圍**篩選
-    - 📄 顯示**摘要** (若 API 有提供)
-    - 📊 表格化呈現合併去重結果
-    - 💾 匯出 CSV 檔案 (含摘要)
+    - 📄 顯示**摘要**與**中文翻譯** (若可用)
+    - 📊 表格化呈現合併去重結果 (含中文標題)
+    - 💾 匯出 CSV 檔案 (含翻譯)
     - 📄 提供 APA 格式範例
 
     ### ⚠️ 注意事項
     - 每次搜尋需間隔 **{COOLDOWN_SECONDS} 秒**。
+    - 機器翻譯僅供參考，且需額外呼叫 API。
     - 若遇 API 錯誤 (如 429)，會顯示提示。
     - PubMed 主要收錄生醫文獻。
     - arXiv 主要收錄 STEM 預印本。
     """)
     st.divider()
-    st.caption("Data retrieved via multiple APIs.")
+    st.caption("Data retrieved via multiple APIs. Translations by Gemini.")
 
 # 頁尾
 st.divider()
