@@ -12,34 +12,55 @@ st.set_page_config(
 )
 
 st.title("🌍 國際期刊文獻搜尋器 (Crossref API)")
-st.markdown("輸入英文關鍵字，即可透過 Crossref API 即時搜尋國際學術文獻。")
+st.markdown("您可以選擇預設關鍵字或自行輸入，程式會將所有關鍵字組合 (AND) 進行搜尋。")
 
-# --- 使用者輸入 ---
-col1, col2 = st.columns([3, 1])
+# --- 預設商管關鍵字 ---
+BUSINESS_KEYWORDS = [
+    "Management", "Marketing", "Finance", "Accounting", "Human Resources",
+    "Strategy", "Supply Chain", "Logistics", "Operations Management", "Business Ethics",
+    "Corporate Social Responsibility", "Entrepreneurship", "Innovation", "International Business", "Organizational Behavior"
+]
+
+# --- 使用者輸入介面 ---
+st.subheader("請設定您的搜尋條件")
+
+col1, col2 = st.columns([2, 1])
 with col1:
-    keyword = st.text_input("🔍 搜尋關鍵字 (請輸入英文)", placeholder="例如：machine learning, supply chain")
+    selected_keywords = st.multiselect(
+        "📚 選擇預設關鍵字 (可複選)",
+        options=BUSINESS_KEYWORDS,
+        default=[] # 預設不選取
+    )
 with col2:
-    max_results = st.number_input("最多顯示幾筆", min_value=5, max_value=100, value=20, step=5)
+    custom_keyword = st.text_input(
+        "⌨️ 或輸入自訂關鍵字 (英文)",
+        placeholder="例如：digital transformation"
+    )
+
+max_results = st.slider("📈 最多顯示幾筆結果", min_value=5, max_value=100, value=20, step=5)
 
 # --- Crossref API 搜尋函數 ---
-@st.cache_data(ttl=3600) # 快取搜尋結果一小時，避免重複請求
-def search_crossref(query, rows=20):
+@st.cache_data(ttl=3600) # 快取搜尋結果一小時
+def search_crossref(query_list, rows=20):
     """
     使用 Crossref API 搜尋學術文獻。
+    query_list: 包含多個關鍵字的列表
     """
     base_url = "https://api.crossref.org/works"
-    # 使用 urllib.parse.quote 來處理特殊字元
-    encoded_query = urllib.parse.quote(query)
-    # Crossref API 建議在請求中包含 mailto 參數，說明是誰在請求
-    mailto = "streamlit.app.user@example.com" # 可以用一個通用的郵箱
+    
+    # 將所有關鍵字用空格連接，代表 AND 邏輯
+    combined_query = " ".join(query_list)
+    encoded_query = urllib.parse.quote(combined_query)
+    
+    mailto = "streamlit.app.user@example.com"
     params = {
         'query.bibliographic': encoded_query,
         'rows': rows,
         'mailto': mailto,
-        'select': 'DOI,title,author,issued,container-title,publisher,type' # 指定我們需要的欄位
+        'select': 'DOI,title,author,issued,container-title,publisher,type'
     }
     headers = {
-        'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)' # 提供 User-Agent
+        'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'
     }
 
     results = []
@@ -47,38 +68,33 @@ def search_crossref(query, rows=20):
 
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=20)
-        response.raise_for_status() # 如果狀態碼不是 2xx，則拋出例外
+        response.raise_for_status()
         data = response.json()
 
         if data['status'] == 'ok' and data['message']['items']:
             for item in data['message']['items']:
-                # 提取需要的資訊
-                title = item.get('title', ["標題未提供"])[0] # title 可能是個列表
+                title = item.get('title', ["N/A"])[0]
                 authors = ", ".join([f"{author.get('given', '')} {author.get('family', '')}".strip()
-                                     for author in item.get('author', [])]) or "作者未提供"
-                
-                # 處理年份
+                                     for author in item.get('author', [])]) or "N/A"
                 issued_parts = item.get('issued', {}).get('date-parts', [[None]])[0]
-                year = issued_parts[0] if issued_parts[0] else "年份未提供"
-
-                journal = ", ".join(item.get('container-title', ["期刊/書籍未提供"])) # container-title 也可能是列表
-                publisher = item.get('publisher', "出版商未提供")
-                doi = item.get('DOI', "DOI 未提供")
-                doi_url = f"https://doi.org/{doi}" if doi != "DOI 未提供" else "#"
-                doc_type = item.get('type', '類型未提供').replace('-', ' ').title() # 格式化文件類型
+                year = issued_parts[0] if issued_parts[0] else "N/A"
+                journal = ", ".join(item.get('container-title', ["N/A"]))
+                publisher = item.get('publisher', "N/A")
+                doi = item.get('DOI', "N/A")
+                doi_url = f"https://doi.org/{doi}" if doi != "N/A" else "#"
+                doc_type = item.get('type', 'N/A').replace('-', ' ').title()
 
                 results.append({
-                    "Title": title,
-                    "Authors": authors,
-                    "Year": year,
-                    "Journal/Book": journal,
-                    "Publisher": publisher,
-                    "Type": doc_type,
-                    "DOI": doi,
-                    "Link": doi_url
+                    "Title": title, "Authors": authors, "Year": year,
+                    "Journal/Book": journal, "Publisher": publisher, "Type": doc_type,
+                    "DOI": doi, "Link": doi_url
                 })
+        # Check if items list is empty even if status is ok
+        elif data['status'] == 'ok' and not data['message']['items']:
+             error_message = "找不到符合所有關鍵字的文獻。" # More specific message
         else:
-            error_message = "找不到相關文獻，或 API 回應格式錯誤。"
+            error_message = f"API 回應錯誤: {data.get('message-type', 'unknown')}"
+
 
     except requests.exceptions.Timeout:
         error_message = "連線逾時，請稍後再試。"
@@ -90,12 +106,18 @@ def search_crossref(query, rows=20):
     return results, error_message
 
 # --- 搜尋按鈕與結果顯示 ---
+st.divider()
+
 if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
-    if not keyword:
-        st.error("❌ 請輸入搜尋關鍵字")
+    # 組合所有關鍵字
+    final_query_list = selected_keywords + ([custom_keyword] if custom_keyword else [])
+
+    if not final_query_list:
+        st.error("❌ 請至少選擇或輸入一個關鍵字")
     else:
-        with st.spinner(f"🔍 正在透過 Crossref API 搜尋「{keyword}」..."):
-            results, error = search_crossref(keyword, max_results)
+        search_term_display = " & ".join(final_query_list) # 用 & 符號顯示組合
+        with st.spinner(f"🔍 正在透過 Crossref API 搜尋「{search_term_display}」..."):
+            results, error = search_crossref(final_query_list, max_results)
 
         if error:
             st.error(f"❌ {error}")
@@ -104,12 +126,9 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
         else:
             st.success(f"✅ 成功找到 {len(results)} 筆文獻！")
             
-            # --- 使用 DataFrame 顯示結果 ---
             df_results = pd.DataFrame(results)
-            
-            # 調整顯示欄位順序
-            display_columns = ["Title", "Authors", "Year", "Journal/Book", "Publisher", "Type", "DOI"]
-            st.dataframe(df_results[display_columns], use_container_width=True)
+            display_columns = ["Title", "Authors", "Year", "Journal/Book", "Type", "DOI"]
+            st.dataframe(df_results[display_columns], use_container_width=True, height=400) # 增加表格高度
 
             # --- 匯出功能 ---
             st.sidebar.header("💾 匯出結果")
@@ -117,7 +136,7 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
             st.sidebar.download_button(
                 label="📥 下載 CSV 檔案",
                 data=csv_data,
-                file_name=f"crossref_{keyword.replace(' ', '_')}_{time.strftime('%Y%m%d')}.csv",
+                file_name=f"crossref_{'_'.join(final_query_list)}_{time.strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 use_container_width=True,
                 type="primary"
@@ -126,11 +145,9 @@ if st.button("🚀 開始搜尋", type="primary", use_container_width=True):
             # --- 顯示 APA 格式 (前幾筆) ---
             st.subheader("📄 APA 7 引用格式 (部分範例)")
             for i, paper in enumerate(results[:5]): # 只顯示前 5 筆 APA
-                # 簡易 APA 格式產生 (僅供參考)
                 apa_citation = f"{paper['Authors']} ({paper['Year']}). {paper['Title']}. *{paper['Journal/Book']}*. {paper['Publisher']}. {paper['Link']}"
                 st.markdown(f"**{i+1}.** {apa_citation}")
                 st.divider()
-
 
 # --- 側邊欄說明 ---
 with st.sidebar:
@@ -138,15 +155,15 @@ with st.sidebar:
     st.markdown("""
     ### ✨ 功能特色
     - 🌍 即時搜尋 **Crossref** 國際學術資料庫
-    - 🔑 支援英文關鍵字搜尋
+    - 📚 提供 **15 個**常用商管關鍵字
+    - ➕ 支援**複選**與**自訂**關鍵字 (以 AND 邏輯組合)
     - 📊 表格化呈現結果
     - 💾 匯出 CSV 檔案
     - 📄 提供 APA 格式範例
 
     ### ⚠️ 注意事項
+    - 組合越多關鍵字，結果越精確，但也可能找不到文獻。
     - API 搜尋速度可能受網路影響。
-    - Crossref 主要提供**元資料** (標題、作者、期刊等)，不一定包含摘要。
-    - 結果涵蓋大量 SCI/SSCI 期刊，但不限於此。
     """)
     st.divider()
     st.caption("Data retrieved via Crossref API.")
