@@ -1,206 +1,191 @@
 import streamlit as st
-import requests
-import json
+import pandas as pd
 import time
 
-# --- 頁面設定 ---
-st.set_page_config(
-    page_title="AI 論文架構助理",
-    page_icon="✍️",
-    layout="wide"
-)
+# --- 終極架構：一個專業的資料庫檢視、篩選與匯出平台 ---
+# 這個平台專門用來管理由您的 AI 研究助理為您客製化搜集的文獻資料。
 
-st.title("✍️ AI 論文架構助理 (Gemini Powered)")
-st.markdown("貼上您的文獻內容、摘要或關鍵字，AI 將協助您生成論文架構草稿。")
+# 使用快取功能來讀取資料，確保只在需要時讀取一次，提升效能
+@st.cache_data
+def load_data():
+    """從 CSV 檔案載入文獻資料庫"""
+    try:
+        df = pd.read_csv("papers_db.csv")
+        # 確保年份是整數，方便排序
+        df['year'] = pd.to_numeric(df['year'], errors='coerce').fillna(0).astype(int)
+        return df
+    except FileNotFoundError:
+        st.error("⚠️ 錯誤：找不到 'papers_db.csv' 資料庫檔案。")
+        st.info("請確認您已經將由 AI 助理提供的 `papers_db.csv` 檔案上傳至您的 GitHub 儲存庫。")
+        return pd.DataFrame()
+    # 新增：處理可能的 CSV 格式錯誤
+    except pd.errors.ParserError:
+        st.error("⚠️ 錯誤：'papers_db.csv' 檔案格式有誤，無法解析。")
+        st.info("請檢查您上傳的 CSV 檔案格式是否正確，或向您的 AI 助理索取一份格式正確的檔案。")
+        return pd.DataFrame()
 
-# --- 使用者輸入介面 ---
-st.subheader("請貼入您的研究資料")
-input_text = st.text_area(
-    "貼入文獻摘要、重點段落或相關關鍵字 (建議至少 500 字以獲得較佳效果)",
-    height=300,
-    placeholder="例如：貼入多篇相關文獻的摘要，或一段描述您研究主題的文字..."
-)
 
-generate_button = st.button("🚀 生成論文架構草稿", type="primary", use_container_width=True)
+# 載入資料
+df = load_data()
 
-# --- Gemini API 呼叫函數 ---
-def generate_thesis_outline(text_input):
-    """使用 Gemini API 根據輸入文本生成論文架構草稿"""
-    api_key = "" # API Key 由 Canvas 環境提供
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
+def main():
+    st.set_page_config(layout="wide", page_title="學術文獻資料庫管理平台")
+    st.title("📚 學術文獻資料庫管理平台")
 
-    # --- 精心設計的 Prompt ---
-    prompt = f"""
-請扮演一位學術研究助理，仔細分析以下提供的文本資料，並根據這些資料，生成一份繁體中文的碩士論文架構草稿 (約三分之二內容)。
+    total_papers = len(df)
+    st.write(f"目前您的專屬資料庫中共有 **{total_papers}** 筆文獻。")
 
-**提供的文本資料：**
----
-{text_input}
----
+    # --- 全新的協作模式說明 ---
+    with st.container(border=True):
+        st.subheader("💡 AI 助理協作模式")
+        st.markdown("""
+        這個平台是您個人的學術資料庫，100% 穩定且可無限擴充。側邊欄的「下載」按鈕是讓您匯出 **目前篩選的結果**，方便您做報告。
 
-**請生成包含以下結構的 Markdown 文件：**
+        **如何擴充您的「資料庫本身」？**
+        1.  **向您的 AI 助理下達指令**：直接在左邊的聊天室告訴助理您需要的研究主題（例如：「請幫我搜集50筆關於『供應鏈金融』的論文」）。
+        2.  **接收「新的資料庫檔案」**：您的助理會為您產生一份全新的、內容更豐富的 `papers_db.csv` 檔案。
+        3.  **更新您的 GitHub**：將這份 **新的資料庫檔案** 更新到您 GitHub 上的 `papers_db.csv`，您的平台就會自動載入最新的資料！
+        """)
 
-1.  **研究背景與動機 (Research Background and Motivation):**
-    * 根據文本資料，描述此研究領域的宏觀背景。
-    * 點出目前存在的問題、趨勢或重要性，引導出研究動機。
+    # --- 篩選與管理介面 ---
+    st.sidebar.header("🔍 篩選與匯出")
 
-2.  **文獻探討 (初步) (Preliminary Literature Review):**
-    * **概述**文本中提到的主要理論、模型或相關研究發現。
-    * (不需要在此詳盡列出所有細節，點出核心即可)。
+    # 分類篩選
+    if not df.empty and 'category' in df.columns:
+        # 處理可能的 NaN 值
+        categories = ["所有分類"] + sorted(df['category'].dropna().unique().tolist())
+        selected_category = st.sidebar.selectbox("文獻分類", categories)
+    else:
+        selected_category = "所有分類"
+        # 只有在 df 不是空的但缺少欄位時才警告
+        if not df.empty:
+             st.sidebar.warning("CSV 缺少 'category' 欄位。")
 
-3.  **研究缺口 (Research Gap):**
-    * 基於文獻探討，明確指出目前研究尚有哪些不足之處、未解的問題或可進一步探討的方向。
 
-4.  **研究目的 (Research Purpose):**
-    * 針對研究缺口，清晰陳述本研究預計達成的具體目標。
+    # 關鍵字搜尋
+    keyword = st.sidebar.text_input("關鍵字篩選（可搜尋標題、摘要等）")
 
-5.  **研究方法 (建議) (Proposed Methodology):**
-    * 根據研究目的和文本內容，**建議**可能的研究方法（例如：質性研究、量化研究、問卷調查、個案分析、實驗設計等）。
-    * 簡述可能的研究對象或資料來源。
+    # 年份範圍篩選 (如果資料庫中有年份欄位)
+    if not df.empty and 'year' in df.columns:
+        # 檢查年份是否都是數字，避免轉換錯誤
+        if pd.api.types.is_numeric_dtype(df['year']):
+            min_year, max_year = int(df['year'].min()), int(df['year'].max())
+            # 確保 min_year <= max_year
+            if min_year <= max_year:
+                selected_years = st.sidebar.slider(
+                    "年份範圍",
+                    min_value=min_year,
+                    max_value=max_year,
+                    value=(min_year, max_year) # 預設選取所有年份
+                )
+                year_start, year_end = selected_years
+            else: # 如果年份資料異常
+                 year_start, year_end = None, None
+                 st.sidebar.warning("年份資料異常，無法篩選。")
+        else:
+             year_start, year_end = None, None
+             st.sidebar.warning("年份欄位包含非數字，無法篩選。")
 
-6.  **預期貢獻 (Expected Contributions):**
-    * 說明本研究完成後，預期在學術理論或實務應用上可能帶來的貢獻。
+    else:
+        year_start, year_end = None, None
+        if not df.empty:
+            st.sidebar.warning("CSV 缺少 'year' 欄位。")
 
-7.  **參考文獻 (初步整理) (Preliminary References):**
-    * **嘗試**從輸入的文本中**提取**可能被引用的文獻。
-    * 將提取到的文獻，盡可能整理成**APA 7 格式**。如果資訊不足，請標註 (資訊不全)。
-    * **注意：** 如果輸入文本主要是關鍵字而非完整摘要，此部分可能無法產生。
 
-**輸出要求：**
-* 請使用**繁體中文**撰寫。
-* 輸出格式為 **Markdown**，使用標題 (#, ##) 來區分章節。
-* 內容需緊密圍繞提供的文本資料。
-* 語氣需專業、客觀。
-* 如果輸入文本不足以生成某個部分，請在該部分簡短說明原因。
-"""
+    # 每頁顯示筆數選項
+    items_per_page = st.sidebar.selectbox(
+        "每頁顯示筆數",
+        options=[10, 25, 50, 100],
+        index=1  # 預設為每頁 25 筆
+    )
 
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-        # 考慮加入 safetySettings 以允許更多學術內容
-        # "safetySettings": [
-        #     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        #     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        #     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        #     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        # ]
-    }
-    headers = {'Content-Type': 'application/json'}
-    max_retries = 3
-    base_delay = 1
-    generated_text = None
-    error_message = None
+    # --- 資料篩選邏輯 ---
+    filtered_df = df.copy()
+    if selected_category != "所有分類" and 'category' in filtered_df.columns:
+        # 確保篩選前欄位存在
+        filtered_df = filtered_df[filtered_df['category'] == selected_category]
 
-    for attempt in range(max_retries):
+    if year_start is not None and year_end is not None and 'year' in filtered_df.columns:
+        # 確保篩選前欄位存在且年份有效
+         if pd.api.types.is_numeric_dtype(filtered_df['year']):
+            filtered_df = filtered_df[(filtered_df['year'] >= year_start) & (filtered_df['year'] <= year_end)]
+
+    if keyword:
+        keyword_lower = keyword.lower()
+        # 在所有欄位中進行搜尋 (更穩健的作法)
         try:
-            response = requests.post(api_url, headers=headers, json=payload, timeout=90) # 增加超時時間
-            
-             # Debug: Print API response status and content
-            # st.sidebar.write(f"Attempt {attempt+1} Status Code:", response.status_code)
-            # st.sidebar.text(response.text[:500]) # Print first 500 chars of response
+            # 將所有欄位轉為字串再搜尋，避免非字串欄位錯誤
+            filtered_df = filtered_df[filtered_df.astype(str).apply(lambda row: keyword_lower in row.to_string().lower(), axis=1)]
+        except Exception as e: # 捕捉可能的錯誤
+             st.error(f"關鍵字篩選時發生錯誤: {e}")
+             filtered_df = pd.DataFrame() # 清空結果避免後續錯誤
 
-            response.raise_for_status() # 檢查 HTTP 錯誤 (4xx, 5xx)
+    total_results = len(filtered_df)
+    st.header(f"📊 篩選結果 ({total_results} 筆)")
 
-            result = response.json()
+    if not filtered_df.empty:
+        # --- 分頁邏輯 ---
+        if 'page' not in st.session_state:
+            st.session_state.page = 1
 
-            if (result.get('candidates') and
-                result['candidates'][0].get('content') and
-                result['candidates'][0]['content'].get('parts') and
-                result['candidates'][0]['content']['parts'][0].get('text')):
-                generated_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                # 嘗試移除 Gemini 可能加入的 Markdown 標記
-                generated_text = generated_text.replace("```markdown", "").replace("```", "").strip()
-                error_message = None # 成功獲取，清除錯誤訊息
-                break # 成功，跳出重試循環
-            # 處理 Gemini 回應中可能包含的 block reason
-            elif result.get('candidates') and result['candidates'][0].get('finishReason') != 'STOP':
-                 reason = result['candidates'][0].get('finishReason', 'UNKNOWN')
-                 safety_ratings = result['candidates'][0].get('safetyRatings', [])
-                 error_message = f"內容生成被中止，原因: {reason}。安全評級: {safety_ratings}"
-                 st.warning(error_message) # 顯示警告但不一定是致命錯誤
-                 # 檢查是否有部分內容生成
-                 if (result['candidates'][0].get('content') and
-                     result['candidates'][0]['content'].get('parts') and
-                     result['candidates'][0]['content']['parts'][0].get('text')):
-                      generated_text = result['candidates'][0]['content']['parts'][0]['text'].strip() + "\n\n**(內容可能不完整)**"
-                      break # 獲取部分內容
-                 else:
-                     generated_text = None # 沒有內容生成
-                     break # 中止重試
-            else:
-                error_message = f"Gemini API 回應格式異常，無法解析生成內容: {result}"
-                generated_text = None
-                # 不一定需要重試，可能是格式問題
-                break
+        total_pages = max(1, (total_results + items_per_page - 1) // items_per_page) # 確保至少有一頁
 
-        except requests.exceptions.Timeout:
-            error_message = f"Gemini API 請求逾時 (嘗試 {attempt + 1}/{max_retries})。"
-            if attempt < max_retries - 1: time.sleep(base_delay * (2 ** attempt))
-        except requests.exceptions.RequestException as e:
-            error_message = f"Gemini API 請求失敗 (嘗試 {attempt + 1}/{max_retries}): {e}"
-            if attempt < max_retries - 1: time.sleep(base_delay * (2 ** attempt))
-            # 如果是 403 Forbidden，可能無需重試
-            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 403:
-                error_message += "\n(錯誤 403 通常表示權限問題或 API 金鑰無效/受限)"
-                break
-        except Exception as e:
-             error_message = f"處理 Gemini API 回應時發生未知錯誤: {e}"
-             generated_text = None
-             break # 未知錯誤，停止重試
+        if st.session_state.page > total_pages: st.session_state.page = 1 # 重設頁碼
+        start_index = (st.session_state.page - 1) * items_per_page
+        end_index = start_index + items_per_page
+        paginated_df = filtered_df.iloc[start_index:end_index]
 
-    return generated_text, error_message
+        # --- 專業表格視圖 ---
+        available_columns = [col for col in ["title", "author", "year", "publication", "category", "keywords"] if col in paginated_df.columns]
+        st.dataframe(paginated_df[available_columns], use_container_width=True, height=400)
 
+        # --- 匯出功能 ---
+        csv_data = filtered_df.to_csv(index=False).encode('utf-8-sig')
+        st.sidebar.download_button(
+            label="📥 下載篩選結果 (CSV)", data=csv_data,
+            file_name=f"My_Research_{time.strftime('%Y%m%d')}.csv", mime="text/csv",
+            use_container_width=True, type="primary"
+        )
 
-# --- 主程式流程 ---
-st.divider()
+        st.subheader("📄 文獻詳細資料與引用")
+        # --- APA 格式產生器與詳細資料 ---
+        for index, paper in paginated_df.iterrows():
+            apa_citation = (
+                f"{paper.get('author', 'N/A')} ({paper.get('year', 'N/A')}). "
+                f"*{paper.get('title', 'N/A')}* "
+                f"[{paper.get('publication', 'N/A')}]({paper.get('link', '#')})." # 假設 CSV 中仍有 link 欄位
+            )
+            with st.expander(f"**{paper.get('title', '標題未提供')}** ({paper.get('year', '年份未提供')})"):
+                st.markdown(f"**作者:** {paper.get('author', 'N/A')}")
+                st.markdown(f"**年份:** {paper.get('year', 'N/A')}")
+                if 'category' in paper: st.markdown(f"**分類:** {paper.get('category', 'N/A')}")
+                if 'publication' in paper: st.markdown(f"**來源:** {paper.get('publication', 'N/A')}")
 
-# 用於顯示結果或錯誤訊息的區域
-result_placeholder = st.empty()
+                # 只有在欄位存在且值不是 NaN 時才顯示
+                if 'abstract' in paper and pd.notna(paper['abstract']):
+                    st.markdown("**摘要:**"); st.info(paper['abstract'])
+                if 'keywords' in paper and pd.notna(paper['keywords']):
+                    st.markdown("**關鍵字:**"); st.success(paper['keywords'])
 
-if generate_button:
-    if not input_text.strip():
-        st.error("❌ 請先在上方文字框貼入您的研究資料。")
-    elif len(input_text.strip()) < 100: # 提醒文字太少
-        st.warning("⚠️ 輸入的文字較少，生成的草稿品質可能有限。建議提供更詳細的資料。")
-        # 仍然繼續嘗試生成
-        with st.spinner("⏳ 正在分析資料並生成論文架構草稿... (可能需要一點時間)"):
-            generated_outline, error = generate_thesis_outline(input_text)
+                st.markdown("**APA 7 引用格式 (參考):**"); st.code(apa_citation, language='text')
 
-        if error:
-            result_placeholder.error(f"❌ 生成失敗：\n{error}")
-        elif generated_outline:
-            result_placeholder.markdown(generated_outline)
-            st.success("✅ 草稿生成完畢！")
-        else:
-             result_placeholder.error("❌ 未知錯誤，無法生成草稿。")
+        # --- 頁面導覽按鈕 ---
+        st.divider()
+        col1, col2, col3 = st.columns([2, 3, 2])
+        with col1:
+            if st.session_state.page > 1:
+                if st.button("⬅️ 上一頁", use_container_width=True): st.session_state.page -= 1; st.rerun()
+        with col2:
+            st.markdown(f"<p style='text-align: center;'><b>第 {st.session_state.page} 頁 / 共 {total_pages} 頁</b></p>", unsafe_allow_html=True)
+        with col3:
+            if st.session_state.page < total_pages:
+                if st.button("下一頁 ➡️", use_container_width=True): st.session_state.page += 1; st.rerun()
 
-    else: # 輸入文字足夠
-        with st.spinner("⏳ 正在分析資料並生成論文架構草稿... (可能需要一點時間)"):
-            generated_outline, error = generate_thesis_outline(input_text)
+    elif df.empty:
+         st.warning("請先透過左側聊天室向 AI 助理索取 `papers_db.csv` 資料庫檔案，並將其上傳至 GitHub。")
+    else:
+        st.warning("找不到符合條件的文獻。請調整您的篩選條件，或向 AI 助理索取更多相關資料。")
 
-        if error:
-            result_placeholder.error(f"❌ 生成失敗：\n{error}")
-        elif generated_outline:
-            result_placeholder.markdown(generated_outline)
-            st.success("✅ 草稿生成完畢！")
-        else:
-            result_placeholder.error("❌ 未知錯誤，無法生成草稿。")
-
-
-# --- 側邊欄說明 ---
-with st.sidebar:
-    st.header("📖 使用說明")
-    st.markdown("""
-    ### ✨ 功能
-    - **貼入資料**：將您收集到的文獻摘要、重點段落、筆記或相關關鍵字貼入主文字框。
-    - **生成草稿**：點擊按鈕，AI (Gemini) 將分析您的輸入，自動生成一份包含背景動機、文獻概述、研究缺口、目的、建議方法、預期貢獻及初步參考文獻的論文架構草稿。
-    - **Markdown 格式**：生成的草稿將以 Markdown 格式呈現，方便您複製和編輯。
-
-    ### 💡 提示
-    - **提供足夠資訊**：輸入的文本越豐富、越相關，生成的草稿品質越高。建議至少提供 500 字以上。
-    - **多次嘗試**：AI 生成的結果可能每次略有不同，您可以調整輸入內容或多次嘗試以獲得最滿意的草稿。
-    - **草稿性質**：請注意，這是一個**輔助工具**，生成的內容是**草稿**，需要您基於專業知識進行修改、補充和完善。參考文獻部分尤其需要仔細核對。
-    - **API 限制**：由於雲端環境限制，偶爾可能遇到 API 請求失敗 (如 403 錯誤)，請稍後再試。
-    """)
-    st.divider()
-    st.caption("Powered by Google Gemini.")
+if __name__ == "__main__":
+    main()
 
