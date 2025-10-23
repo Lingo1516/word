@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("🚀 多平台學術文獻搜尋平台")
-st.markdown("同時搜尋 Semantic Scholar, arXiv, PubMed，提供摘要並整合去重結果。") # 移除翻譯相關描述
+st.markdown("同時搜尋 Semantic Scholar, arXiv, PubMed，提供摘要預覽並整合去重結果。") # 更新描述
 
 # --- 設定冷卻時間（秒） ---
 COOLDOWN_SECONDS = 5
@@ -39,10 +39,6 @@ BUSINESS_KEYWORDS_DICT = [
     {"en": "International Business", "zh": "國際企業"},
     {"en": "Organizational Behavior", "zh": "組織行為"}
 ]
-
-# --- 移除翻譯函數 ---
-# def translate_text(...):
-#     ...
 
 # --- 使用者輸入介面 ---
 st.subheader("請設定您的搜尋條件")
@@ -71,11 +67,12 @@ with col_slider:
     max_results_per_source = st.slider("📈 **每個來源**最多顯示幾筆", min_value=5, max_value=30, value=10, step=5)
 
 
-# --- API 搜尋函數 (移除翻譯欄位) ---
+# --- API 搜尋函數 (保持不變) ---
 
 # Semantic Scholar API
 @st.cache_data(ttl=3600)
 def search_semantic_scholar(query, start_year, end_year, limit=10):
+    # ... (省略未變更的 API 呼叫函數內容) ...
     base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
     year_filter = f"{start_year}-{end_year}"
     params = {
@@ -125,6 +122,7 @@ def search_semantic_scholar(query, start_year, end_year, limit=10):
 # arXiv API
 @st.cache_data(ttl=3600)
 def search_arxiv(query, start_year, end_year, max_results=10):
+    # ... (省略未變更的 API 呼叫函數內容) ...
     base_url = 'http://export.arxiv.org/api/query?'
     search_query = f'all:"{query}"'
     params = f'search_query={search_query}&sortBy=submittedDate&sortOrder=descending&start=0&max_results={max_results * 5}'
@@ -171,6 +169,7 @@ def search_arxiv(query, start_year, end_year, max_results=10):
 # PubMed API
 @st.cache_data(ttl=3600)
 def search_pubmed(query, start_year, end_year, max_results=10):
+    # ... (省略未變更的 API 呼叫函數內容) ...
     base_search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     base_fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
     term_with_year = f"{query} AND (\"{start_year}\"[Date - Publication] : \"{end_year}\"[Date - Publication])"
@@ -273,7 +272,6 @@ if search_button_clicked and can_search:
              all_results_raw.extend(results)
              progress_bar.progress((i + 1) / total_apis)
 
-        # --- 移除翻譯步驟 ---
         progress_text.text("🔄 正在整合結果...") # 更新狀態
 
         if not all_results_raw:
@@ -286,24 +284,33 @@ if search_button_clicked and can_search:
             df_raw['source_priority'] = df_raw['source'].map({'Semantic Scholar': 1, 'arXiv': 2, 'PubMed': 3}).fillna(4)
             df_raw['title_lower'] = df_raw['title'].str.lower().str.strip() # 使用 title 欄位
             df_final = df_raw.sort_values('source_priority').drop_duplicates(subset=['title_lower'], keep='first').reset_index(drop=True)
+
+            # --- 新增：產生摘要預覽 ---
+            def create_snippet(text, length=150):
+                if pd.isna(text) or text == "":
+                    return ""
+                text = str(text).replace("\n", " ") # 移除換行
+                return text[:length] + "..." if len(text) > length else text
+
+            df_final['abstract_snippet'] = df_final['abstract'].apply(create_snippet)
+
+            # --- 移除輔助欄位 ---
             df_final = df_final.drop(columns=['source_priority', 'title_lower'])
 
             progress_text.empty(); progress_bar.empty()
             st.success(f"✅ 成功找到 {len(df_final)} 筆文獻！")
 
-            # --- 更新：表格顯示 (移除中文標題) ---
-            display_columns = ["source", "title", "author", "year", "publication"] # 移除 title_zh
+            # --- 更新：表格顯示 (加入摘要預覽) ---
+            display_columns = ["source", "title", "author", "year", "publication", "abstract_snippet"] # 加入摘要預覽欄位
             st.dataframe(df_final[display_columns], use_container_width=True, height=400)
 
-            # --- 匯出功能 (移除翻譯欄位) ---
+            # --- 匯出功能 (保持不變，匯出完整摘要) ---
             st.sidebar.header("💾 匯出結果")
-            # 確保匯出欄位正確
             export_columns = ['source', 'title', 'author', 'year', 'publication', 'keywords', 'abstract', 'link']
-            # 只保留 df_final 中存在的欄位進行匯出
             export_df = df_final[[col for col in export_columns if col in df_final.columns]]
             csv_data = export_df.to_csv(index=False, encoding='utf-8-sig')
             st.sidebar.download_button(
-                label="📥 下載 CSV 檔案 (含摘要)", # 移除 "含翻譯"
+                label="📥 下載 CSV 檔案 (含完整摘要)",
                 data=csv_data,
                 file_name=f"multi_api_search_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv",
                 mime="text/csv",
@@ -311,10 +318,9 @@ if search_button_clicked and can_search:
                 type="primary"
             )
 
-            # --- 顯示詳細資料與摘要 (移除翻譯) ---
+            # --- 顯示詳細資料與摘要 (保持不變) ---
             st.subheader("📄 文獻詳細資料與摘要")
             for i, paper in df_final.iterrows():
-                # 使用英文標題
                 expander_title = f"**{i+1}. {paper.get('title','N/A')}** ({paper.get('year','N/A')}) - _{paper.get('source','Unknown')}_"
                 apa_citation = f"{paper.get('author','N/A')} ({paper.get('year','N/A')}). {paper.get('title','N/A')}. *{paper.get('publication','N/A')}*. {paper.get('link','#')}"
 
@@ -323,16 +329,12 @@ if search_button_clicked and can_search:
                     st.markdown(f"**發表於:** *{paper.get('publication','N/A')}*")
                     st.markdown(f"**連結:** {paper.get('link','#')}")
 
-                    st.markdown("**摘要:**") # 只顯示英文摘要
+                    st.markdown("**摘要:**")
                     abstract = paper.get('abstract', '摘要未提供')
                     if abstract:
                         st.text_area(f"摘要_{i}", abstract, height=150, disabled=True, label_visibility="collapsed")
                     else:
                         st.caption("摘要未提供")
-
-                    # --- 移除中文翻譯顯示區塊 ---
-                    # st.markdown("**中文翻譯:**")
-                    # ...
 
                     st.markdown("**APA 7 引用格式 (參考):**")
                     st.code(apa_citation, language='text')
@@ -348,13 +350,12 @@ with st.sidebar:
     - ➕ 支援**複選**與**自訂**關鍵字 (AND 邏輯)
     - 📅 **年份範圍**篩選
     - 📄 顯示**摘要** (若 API 有提供)
-    - 📊 表格化呈現合併去重結果
-    - 💾 匯出 CSV 檔案 (含摘要)
+    - 📊 表格化呈現結果 (含**摘要預覽**)
+    - 💾 匯出 CSV 檔案 (含**完整**摘要)
     - 📄 提供 APA 格式範例
 
     ### ⚠️ 注意事項
     - 每次搜尋需間隔 **{COOLDOWN_SECONDS} 秒**。
-    - **已移除中文翻譯功能**以確保穩定性。
     - 若遇 API 錯誤 (如 429)，會顯示提示。
     - PubMed 主要收錄生醫文獻。
     - arXiv 主要收錄 STEM 預印本。
