@@ -1,246 +1,206 @@
 import streamlit as st
 import requests
-import pandas as pd
+import json
 import time
-from datetime import datetime
-# import xml.etree.ElementTree as ET # 不再需要
-import re # 用於清理摘要
 
 # --- 頁面設定 ---
 st.set_page_config(
-    page_title="學術文獻搜尋平台 (Semantic Scholar API)", # 更新標題
-    page_icon="💡",
+    page_title="AI 論文架構助理",
+    page_icon="✍️",
     layout="wide"
 )
 
-st.title("💡 學術文獻搜尋平台 (Semantic Scholar API)") # 更新標題
-st.markdown("使用 Semantic Scholar API 即時搜尋國際學術文獻（通常包含摘要）。") # 更新描述
-
-# --- 設定冷卻時間（秒） ---
-COOLDOWN_SECONDS = 5
-if 'last_search_time' not in st.session_state:
-    st.session_state.last_search_time = 0
-
-# --- 預設商管關鍵字（包含中英文） ---
-BUSINESS_KEYWORDS_DICT = [
-     {"en": "Management", "zh": "管理學"},
-    {"en": "Marketing", "zh": "市場行銷"},
-    {"en": "Finance", "zh": "財務金融"},
-    {"en": "Accounting", "zh": "會計學"},
-    {"en": "Human Resources", "zh": "人力資源"},
-    {"en": "Strategy", "zh": "策略管理"},
-    {"en": "Supply Chain", "zh": "供應鏈管理"},
-    {"en": "Logistics", "zh": "物流管理"},
-    {"en": "Operations Management", "zh": "營運管理"},
-    {"en": "Business Ethics", "zh": "商業倫理"},
-    {"en": "Corporate Social Responsibility", "zh": "企業社會責任"},
-    {"en": "Entrepreneurship", "zh": "創業精神"},
-    {"en": "Innovation", "zh": "創新管理"},
-    {"en": "International Business", "zh": "國際企業"},
-    {"en": "Organizational Behavior", "zh": "組織行為"}
-]
+st.title("✍️ AI 論文架構助理 (Gemini Powered)")
+st.markdown("貼上您的文獻內容、摘要或關鍵字，AI 將協助您生成論文架構草稿。")
 
 # --- 使用者輸入介面 ---
-st.subheader("請設定您的搜尋條件")
-col_keyword1, col_keyword2 = st.columns([2, 1])
-with col_keyword1:
-    selected_keyword_dicts = st.multiselect(
-        "📚 選擇預設關鍵字 (可複選)",
-        options=BUSINESS_KEYWORDS_DICT,
-        format_func=lambda keyword_dict: f"{keyword_dict['en']} ({keyword_dict['zh']})",
-        default=[]
-    )
-    selected_keywords_en = [k['en'] for k in selected_keyword_dicts]
-with col_keyword2:
-    custom_keyword = st.text_input(
-        "⌨️ 或輸入自訂關鍵字 (英文)",
-        placeholder="例如：digital transformation"
-    )
+st.subheader("請貼入您的研究資料")
+input_text = st.text_area(
+    "貼入文獻摘要、重點段落或相關關鍵字 (建議至少 500 字以獲得較佳效果)",
+    height=300,
+    placeholder="例如：貼入多篇相關文獻的摘要，或一段描述您研究主題的文字..."
+)
 
-current_year = datetime.now().year
-col_year1, col_year2, col_slider = st.columns([1, 1, 2])
-with col_year1:
-    year_start = st.number_input("⏳ 起始年份", min_value=1980, max_value=current_year, value=current_year - 5)
-with col_year2:
-    year_end = st.number_input("⌛ 結束年份", min_value=1980, max_value=current_year, value=current_year)
-with col_slider:
-    # 調整標籤，因為現在只有一個來源
-    max_results = st.slider("📈 最多顯示幾筆結果", min_value=5, max_value=100, value=20, step=5)
+generate_button = st.button("🚀 生成論文架構草稿", type="primary", use_container_width=True)
 
+# --- Gemini API 呼叫函數 ---
+def generate_thesis_outline(text_input):
+    """使用 Gemini API 根據輸入文本生成論文架構草稿"""
+    api_key = "" # API Key 由 Canvas 環境提供
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
 
-# --- API 搜尋函數 ---
+    # --- 精心設計的 Prompt ---
+    prompt = f"""
+請扮演一位學術研究助理，仔細分析以下提供的文本資料，並根據這些資料，生成一份繁體中文的碩士論文架構草稿 (約三分之二內容)。
 
-# Semantic Scholar API (保持不變)
-@st.cache_data(ttl=3600)
-def search_semantic_scholar(query, start_year, end_year, limit=10):
-    base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
-    year_filter = f"{start_year}-{end_year}"
-    params = {
-        'query': query, 'year': year_filter, 'limit': limit,
-        'fields': 'title,authors,year,abstract,venue,publicationVenue,journal,externalIds,url,keywords'
+**提供的文本資料：**
+---
+{text_input}
+---
+
+**請生成包含以下結構的 Markdown 文件：**
+
+1.  **研究背景與動機 (Research Background and Motivation):**
+    * 根據文本資料，描述此研究領域的宏觀背景。
+    * 點出目前存在的問題、趨勢或重要性，引導出研究動機。
+
+2.  **文獻探討 (初步) (Preliminary Literature Review):**
+    * **概述**文本中提到的主要理論、模型或相關研究發現。
+    * (不需要在此詳盡列出所有細節，點出核心即可)。
+
+3.  **研究缺口 (Research Gap):**
+    * 基於文獻探討，明確指出目前研究尚有哪些不足之處、未解的問題或可進一步探討的方向。
+
+4.  **研究目的 (Research Purpose):**
+    * 針對研究缺口，清晰陳述本研究預計達成的具體目標。
+
+5.  **研究方法 (建議) (Proposed Methodology):**
+    * 根據研究目的和文本內容，**建議**可能的研究方法（例如：質性研究、量化研究、問卷調查、個案分析、實驗設計等）。
+    * 簡述可能的研究對象或資料來源。
+
+6.  **預期貢獻 (Expected Contributions):**
+    * 說明本研究完成後，預期在學術理論或實務應用上可能帶來的貢獻。
+
+7.  **參考文獻 (初步整理) (Preliminary References):**
+    * **嘗試**從輸入的文本中**提取**可能被引用的文獻。
+    * 將提取到的文獻，盡可能整理成**APA 7 格式**。如果資訊不足，請標註 (資訊不全)。
+    * **注意：** 如果輸入文本主要是關鍵字而非完整摘要，此部分可能無法產生。
+
+**輸出要求：**
+* 請使用**繁體中文**撰寫。
+* 輸出格式為 **Markdown**，使用標題 (#, ##) 來區分章節。
+* 內容需緊密圍繞提供的文本資料。
+* 語氣需專業、客觀。
+* 如果輸入文本不足以生成某個部分，請在該部分簡短說明原因。
+"""
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+        # 考慮加入 safetySettings 以允許更多學術內容
+        # "safetySettings": [
+        #     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        #     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        #     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        #     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        # ]
     }
-    headers = {'User-Agent': 'StreamlitApp/1.0 (mailto:streamlit.app.user@example.com)'}
-    papers = []
+    headers = {'Content-Type': 'application/json'}
+    max_retries = 3
+    base_delay = 1
+    generated_text = None
     error_message = None
-    try:
-        resp = requests.get(base_url, params=params, headers=headers, timeout=20)
-        if resp.status_code == 429:
-             retry_after = resp.headers.get("Retry-After", COOLDOWN_SECONDS)
-             error_message = f"Semantic Scholar API 請求過頻 (429)，建議等待 {retry_after} 秒。"
-             return papers, error_message
-        resp.raise_for_status()
-        data = resp.json()
-        for p in data.get('data', []):
-            author = "; ".join([a.get('name','') for a in p.get('authors',[])])
-            abstract_raw = p.get('abstract','')
-            abstract = ' '.join(abstract_raw.split()) if abstract_raw else ''
-            journal_info = p.get('journal')
-            venue = p.get('venue') or p.get('publicationVenue', {}).get('name')
-            journal_venue = venue if venue else (journal_info.get('name') if journal_info else "N/A")
-            keywords_list = p.get('keywords', [])
-            keywords_str = "; ".join(keywords_list) if keywords_list else ""
-            doi = p.get('externalIds', {}).get('DOI', "")
-            link_url = f"https://doi.org/{doi}" if doi else p.get('url','')
-            title = p.get('title','')
 
-            papers.append({
-                # 移除 'source' 欄位，因為只有一個來源
-                'title': title,
-                'author': author,
-                'year': p.get('year',''),
-                'publication': journal_venue,
-                'keywords': keywords_str,
-                'abstract': abstract,
-                'link': link_url
-            })
-    except requests.exceptions.Timeout: error_message = "連線 Semantic Scholar API 逾時。"
-    except requests.exceptions.RequestException as e: error_message = f"Semantic Scholar API 請求錯誤: {e}"
-    except Exception as e: error_message = f"處理 Semantic Scholar 資料時發生錯誤: {e}"
-    return papers, error_message
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(api_url, headers=headers, json=payload, timeout=90) # 增加超時時間
+            
+             # Debug: Print API response status and content
+            # st.sidebar.write(f"Attempt {attempt+1} Status Code:", response.status_code)
+            # st.sidebar.text(response.text[:500]) # Print first 500 chars of response
 
-# --- 移除 search_arxiv 和 search_pubmed 函數 ---
-# def search_arxiv(...):
-#     ...
-# def search_pubmed(...):
-#     ...
+            response.raise_for_status() # 檢查 HTTP 錯誤 (4xx, 5xx)
+
+            result = response.json()
+
+            if (result.get('candidates') and
+                result['candidates'][0].get('content') and
+                result['candidates'][0]['content'].get('parts') and
+                result['candidates'][0]['content']['parts'][0].get('text')):
+                generated_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                # 嘗試移除 Gemini 可能加入的 Markdown 標記
+                generated_text = generated_text.replace("```markdown", "").replace("```", "").strip()
+                error_message = None # 成功獲取，清除錯誤訊息
+                break # 成功，跳出重試循環
+            # 處理 Gemini 回應中可能包含的 block reason
+            elif result.get('candidates') and result['candidates'][0].get('finishReason') != 'STOP':
+                 reason = result['candidates'][0].get('finishReason', 'UNKNOWN')
+                 safety_ratings = result['candidates'][0].get('safetyRatings', [])
+                 error_message = f"內容生成被中止，原因: {reason}。安全評級: {safety_ratings}"
+                 st.warning(error_message) # 顯示警告但不一定是致命錯誤
+                 # 檢查是否有部分內容生成
+                 if (result['candidates'][0].get('content') and
+                     result['candidates'][0]['content'].get('parts') and
+                     result['candidates'][0]['content']['parts'][0].get('text')):
+                      generated_text = result['candidates'][0]['content']['parts'][0]['text'].strip() + "\n\n**(內容可能不完整)**"
+                      break # 獲取部分內容
+                 else:
+                     generated_text = None # 沒有內容生成
+                     break # 中止重試
+            else:
+                error_message = f"Gemini API 回應格式異常，無法解析生成內容: {result}"
+                generated_text = None
+                # 不一定需要重試，可能是格式問題
+                break
+
+        except requests.exceptions.Timeout:
+            error_message = f"Gemini API 請求逾時 (嘗試 {attempt + 1}/{max_retries})。"
+            if attempt < max_retries - 1: time.sleep(base_delay * (2 ** attempt))
+        except requests.exceptions.RequestException as e:
+            error_message = f"Gemini API 請求失敗 (嘗試 {attempt + 1}/{max_retries}): {e}"
+            if attempt < max_retries - 1: time.sleep(base_delay * (2 ** attempt))
+            # 如果是 403 Forbidden，可能無需重試
+            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 403:
+                error_message += "\n(錯誤 403 通常表示權限問題或 API 金鑰無效/受限)"
+                break
+        except Exception as e:
+             error_message = f"處理 Gemini API 回應時發生未知錯誤: {e}"
+             generated_text = None
+             break # 未知錯誤，停止重試
+
+    return generated_text, error_message
 
 
 # --- 主程式流程 ---
 st.divider()
 
-# 冷卻狀態顯示
-current_time = time.time()
-time_since_last_search = current_time - st.session_state.last_search_time
-remaining_cooldown = COOLDOWN_SECONDS - time_since_last_search
-status_placeholder = st.empty()
-can_search = remaining_cooldown <= 0
-if not can_search:
-    status_placeholder.warning(f"⏳ 冷卻中，請等待 {int(remaining_cooldown) + 1} 秒...")
+# 用於顯示結果或錯誤訊息的區域
+result_placeholder = st.empty()
 
-search_button_clicked = st.button("🚀 開始搜尋", type="primary", use_container_width=True, disabled=not can_search)
-
-if search_button_clicked and can_search:
-    status_placeholder.empty()
-    final_query_list = selected_keywords_en + ([custom_keyword] if custom_keyword else [])
-
-    if not final_query_list:
-        st.error("❌ 請至少選擇或輸入一個關鍵字")
-    elif year_start > year_end:
-         st.error("❌ 起始年份不能晚於結束年份")
-    else:
-        st.session_state.last_search_time = time.time()
-        search_term = " ".join(final_query_list) # 合併成單一查詢字串
-        search_term_display = " & ".join(final_query_list)
-        year_range_display = f" ({year_start}-{year_end})"
-
-        # --- 簡化搜尋流程 ---
-        with st.spinner(f"🔍 正在 Semantic Scholar 搜尋「{search_term_display}」{year_range_display}..."):
-            # 直接呼叫 Semantic Scholar 函數
-            results, error = search_semantic_scholar(search_term, year_start, year_end, max_results) # 使用 max_results
+if generate_button:
+    if not input_text.strip():
+        st.error("❌ 請先在上方文字框貼入您的研究資料。")
+    elif len(input_text.strip()) < 100: # 提醒文字太少
+        st.warning("⚠️ 輸入的文字較少，生成的草稿品質可能有限。建議提供更詳細的資料。")
+        # 仍然繼續嘗試生成
+        with st.spinner("⏳ 正在分析資料並生成論文架構草稿... (可能需要一點時間)"):
+            generated_outline, error = generate_thesis_outline(input_text)
 
         if error:
-            st.error(f"❌ {error}")
-        elif not results:
-            st.warning("⚠️ 找不到相關文獻")
+            result_placeholder.error(f"❌ 生成失敗：\n{error}")
+        elif generated_outline:
+            result_placeholder.markdown(generated_outline)
+            st.success("✅ 草稿生成完畢！")
         else:
-            df_final = pd.DataFrame(results) # 不再需要去重
+             result_placeholder.error("❌ 未知錯誤，無法生成草稿。")
 
-            st.success(f"✅ 成功找到 {len(df_final)} 筆文獻！")
+    else: # 輸入文字足夠
+        with st.spinner("⏳ 正在分析資料並生成論文架構草稿... (可能需要一點時間)"):
+            generated_outline, error = generate_thesis_outline(input_text)
 
-            # --- 新增：產生摘要預覽 ---
-            def create_snippet(text, length=150):
-                if pd.isna(text) or text == "":
-                    return ""
-                text = str(text).replace("\n", " ") # 移除換行
-                return text[:length] + "..." if len(text) > length else text
+        if error:
+            result_placeholder.error(f"❌ 生成失敗：\n{error}")
+        elif generated_outline:
+            result_placeholder.markdown(generated_outline)
+            st.success("✅ 草稿生成完畢！")
+        else:
+            result_placeholder.error("❌ 未知錯誤，無法生成草稿。")
 
-            df_final['abstract_snippet'] = df_final['abstract'].apply(create_snippet)
-
-            # --- 更新：表格顯示 (移除 source 欄位) ---
-            display_columns = ["title", "author", "year", "publication", "abstract_snippet"] # 移除 source
-            st.dataframe(df_final[display_columns], use_container_width=True, height=400)
-
-            # --- 匯出功能 ---
-            st.sidebar.header("💾 匯出結果")
-            # 確保匯出所有需要的欄位
-            export_columns = ['title', 'author', 'year', 'publication', 'keywords', 'abstract', 'link']
-            export_df = df_final[[col for col in export_columns if col in df_final.columns]]
-            csv_data = export_df.to_csv(index=False, encoding='utf-8-sig')
-            st.sidebar.download_button(
-                label="📥 下載 CSV 檔案 (含完整摘要)",
-                data=csv_data,
-                file_name=f"semantic_scholar_{'_'.join(final_query_list)}_{year_start}-{year_end}_{time.strftime('%Y%m%d')}.csv", # 更新檔名
-                mime="text/csv",
-                use_container_width=True,
-                type="primary"
-            )
-
-            # --- 顯示詳細資料與摘要 ---
-            st.subheader("📄 文獻詳細資料與摘要")
-            for i, paper in df_final.iterrows():
-                # 移除 source 顯示
-                expander_title = f"**{i+1}. {paper.get('title','N/A')}** ({paper.get('year','N/A')})"
-                apa_citation = f"{paper.get('author','N/A')} ({paper.get('year','N/A')}). {paper.get('title','N/A')}. *{paper.get('publication','N/A')}*. {paper.get('link','#')}"
-
-                with st.expander(expander_title, expanded=(i < 3)):
-                    st.markdown(f"**作者:** {paper.get('author','N/A')}")
-                    st.markdown(f"**發表於:** *{paper.get('publication','N/A')}*")
-                    st.markdown(f"**連結:** {paper.get('link','#')}")
-
-                    st.markdown("**摘要:**")
-                    abstract = paper.get('abstract', '摘要未提供')
-                    if abstract:
-                        st.text_area(f"摘要_{i}", abstract, height=150, disabled=True, label_visibility="collapsed")
-                    else:
-                        st.caption("摘要未提供")
-
-                    st.markdown("**APA 7 引用格式 (參考):**")
-                    st.code(apa_citation, language='text')
 
 # --- 側邊欄說明 ---
 with st.sidebar:
     st.header("📖 使用說明")
-    # 更新說明文字
-    st.markdown(f"""
-    ### ✨ 功能特色
-    - 🌍 即時搜尋 **Semantic Scholar** 國際學術資料庫
-    - 📚 提供 **15 個**常用商管關鍵字 (含中文)
-    - ➕ 支援**複選**與**自訂**關鍵字 (AND 邏輯)
-    - 📅 **年份範圍**篩選
-    - 📄 顯示**摘要** (若 API 有提供)
-    - 📊 表格化呈現結果 (含**摘要預覽**)
-    - 💾 匯出 CSV 檔案 (含**完整**摘要)
-    - 📄 提供 APA 格式範例
+    st.markdown("""
+    ### ✨ 功能
+    - **貼入資料**：將您收集到的文獻摘要、重點段落、筆記或相關關鍵字貼入主文字框。
+    - **生成草稿**：點擊按鈕，AI (Gemini) 將分析您的輸入，自動生成一份包含背景動機、文獻概述、研究缺口、目的、建議方法、預期貢獻及初步參考文獻的論文架構草稿。
+    - **Markdown 格式**：生成的草稿將以 Markdown 格式呈現，方便您複製和編輯。
 
-    ### ⚠️ 注意事項
-    - 每次搜尋需間隔 **{COOLDOWN_SECONDS} 秒**。
-    - 若遇 API 錯誤 (如 429)，會顯示提示。
-    - Semantic Scholar 涵蓋多學科，建議使用精確關鍵字。
+    ### 💡 提示
+    - **提供足夠資訊**：輸入的文本越豐富、越相關，生成的草稿品質越高。建議至少提供 500 字以上。
+    - **多次嘗試**：AI 生成的結果可能每次略有不同，您可以調整輸入內容或多次嘗試以獲得最滿意的草稿。
+    - **草稿性質**：請注意，這是一個**輔助工具**，生成的內容是**草稿**，需要您基於專業知識進行修改、補充和完善。參考文獻部分尤其需要仔細核對。
+    - **API 限制**：由於雲端環境限制，偶爾可能遇到 API 請求失敗 (如 403 錯誤)，請稍後再試。
     """)
     st.divider()
-    st.caption("Data retrieved via Semantic Scholar API.") # 更新來源
-
-# 頁尾
-st.divider()
-st.caption("⚠️ 本工具僅供學術研究參考。")
+    st.caption("Powered by Google Gemini.")
 
