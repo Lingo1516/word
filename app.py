@@ -4,18 +4,7 @@ import json
 import re
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (學術嚴謹版)", layout="wide", page_icon="🎓")
-
-# --- [關鍵新增] 學術寫作規範指令 (您提供的規則) ---
-ACADEMIC_RULES_CH2 = """
-**【文獻回顧撰寫嚴格規範】**
-在撰寫本章時，請務必遵守以下學術標準：
-1. **理論依據明確**：提出任何構面或分類時，必須在段落開頭說明其理論基礎（例如：「本研究參考 ADDIE 模型之分析階段...」），不可憑空分類。
-2. **文獻支持具體**：每一個準則或細項，都必須有具體的文獻引用支持（例如：「某學者(Year)指出...」），不可僅列為背景。
-3. **善用綜合比較表**：必須包含一個結構化表格，欄位包括：「構面」、「準則/指標」、「關鍵文獻來源」、「理論基礎/參考模型」。
-4. **邏輯推演**：請展現「先論述文獻，再歸納出本研究架構」的邏輯，不要先講結論。
-5. **引用格式**：文中引用 (In-text Citation) 必須精準，且必須與使用者提供的真實文獻列表一致。
-"""
+st.set_page_config(page_title="論文寫作助手 (格式優化版)", layout="wide", page_icon="🎓")
 
 # --- 核心 1: 掃描模型 ---
 def get_available_models(api_key):
@@ -34,7 +23,23 @@ def get_available_models(api_key):
         return None
     except: return None
 
-# --- 核心 2: 寫作函式 ---
+# --- 核心 2: 圖表代碼清洗 ---
+def clean_graphviz_code(raw_code):
+    clean = raw_code.replace("```dot", "").replace("```", "").strip()
+    # 強制加入 rankdir=TB (直式)
+    if "rankdir" not in clean:
+        # 如果已經有大括號，插入設定
+        if "{" in clean:
+            clean = clean.replace("{", '{\n  rankdir=TB;\n  node [fontname="Microsoft JhengHei"];\n', 1)
+    
+    match = re.search(r'digraph\s+.*\{.*\}', clean, re.DOTALL)
+    if match: return match.group(0)
+    start = clean.find('{')
+    end = clean.rfind('}')
+    if start != -1 and end != -1: return f"digraph G {clean[start:end+1]}"
+    return clean
+
+# --- 核心 3: 寫作函式 ---
 def ask_gemini(prompt, api_key, model_name):
     if not api_key: return "⚠️ 請設定 Key"
     real_model_name = f"models/{model_name}" if "models/" not in model_name else model_name
@@ -46,20 +51,10 @@ def ask_gemini(prompt, api_key, model_name):
         if response.status_code == 200:
             try: return response.json()['candidates'][0]['content']['parts'][0]['text']
             except: return "⚠️ 生成成功但解析失敗"
-        elif response.status_code == 429: return "⏳ 速度限制 (429)，請稍候 20 秒..."
-        elif response.status_code == 404: return f"❌ 模型錯誤 (404): {model_name} 不存在。"
+        elif response.status_code == 429: return "⏳ 速度限制，請稍候..."
+        elif response.status_code == 404: return f"❌ 模型錯誤: {model_name} 不存在。"
         else: return f"❌ 連線錯誤 ({response.status_code}): {response.text}"
     except Exception as e: return f"❌ 網路錯誤：{str(e)}"
-
-# --- 核心 3: 清洗圖表代碼 ---
-def clean_graphviz_code(raw_code):
-    clean = raw_code.replace("```dot", "").replace("```", "").strip()
-    match = re.search(r'digraph\s+.*\{.*\}', clean, re.DOTALL)
-    if match: return match.group(0)
-    start = clean.find('{')
-    end = clean.rfind('}')
-    if start != -1 and end != -1: return f"digraph G {clean[start:end+1]}"
-    return clean
 
 # --- 初始化 ---
 if 'step' not in st.session_state: st.session_state.step = 0
@@ -71,19 +66,10 @@ if 'framework' not in st.session_state: st.session_state.framework = ""
 if 'framework_dot' not in st.session_state: st.session_state.framework_dot = ""
 if 'outline' not in st.session_state: st.session_state.outline = ""
 if 'content' not in st.session_state: st.session_state.content = {}
-if 'graph_code' not in st.session_state: st.session_state.graph_code = "" # 第四章結果圖
-if 'concept_map_code' not in st.session_state: st.session_state.concept_map_code = "" # 第二章觀念架構圖
+if 'graph_code' not in st.session_state: st.session_state.graph_code = ""
+if 'concept_map_code' not in st.session_state: st.session_state.concept_map_code = ""
 if 'apa_refs' not in st.session_state: st.session_state.apa_refs = ""
 if 'my_models' not in st.session_state: st.session_state.my_models = []
-
-# 章節定義 (調整說明)
-CHAPTERS = [
-    {"key": "ch1", "name": "第一章 緒論", "desc": "背景、動機、目的、研究流程 (不含詳細架構圖)"},
-    {"key": "ch2", "name": "第二章 文獻探討", "desc": "理論基礎推導、歸納指標、建立觀念性架構 (含架構圖)"},
-    {"key": "ch3", "name": "第三章 研究方法", "desc": "研究設計、操作型定義、分析工具"},
-    {"key": "ch4", "name": "第四章 分析結果", "desc": "數據分析、結果呈現"},
-    {"key": "ch5", "name": "第五章 結論與建議", "desc": "總結、管理意涵"}
-]
 
 # --- 側邊欄 ---
 api_key = None
@@ -100,11 +86,7 @@ with st.sidebar:
         if st.button("🔄 搜尋可用模型"):
             with st.spinner("掃描中..."):
                 found = get_available_models(api_key)
-                if found: 
-                    st.session_state.my_models = found
-                    st.success(f"找到 {len(found)} 個")
-                else:
-                    st.error("掃描失敗")
+                if found: st.session_state.my_models = found
 
     model_options = ["gemini-1.5-flash", "gemini-1.5-pro"]
     if st.session_state.my_models: model_options = st.session_state.my_models
@@ -114,15 +96,35 @@ with st.sidebar:
     selected_model = st.selectbox("選擇模型", model_options, index=default_index)
     
     st.divider()
-    st.header("📝 2. 研究設定")
+    st.header("📝 2. 論文規格")
     
-    # 商管關鍵字選單
+    paper_type = st.radio("寫作格式", ["學位論文 (Thesis)", "期刊論文 (Journal)"])
+    
+    # 章節定義 (根據學術慣例調整限制的位置)
+    if paper_type == "學位論文 (Thesis)":
+        CHAPTERS = [
+            {"key": "ch1", "name": "第一章 緒論", "prompt": "背景、動機、目的、研究範圍與限制 (Scope & Delimitations)"},
+            {"key": "ch2", "name": "第二章 文獻探討", "prompt": "理論基礎、觀念性架構推導 (不含數據)"},
+            {"key": "ch3", "name": "第三章 研究方法", "prompt": "架構、方法步驟、工具 (不含研究限制)"},
+            {"key": "ch4", "name": "第四章 分析結果", "prompt": "數據呈現、圖表分析 (不含結論)"},
+            {"key": "ch5", "name": "第五章 結論與建議", "prompt": "研究發現、管理意涵、研究限制與建議 (Limitations & Future Research)"}
+        ]
+    else: # 期刊論文 (IMRaD)
+        CHAPTERS = [
+            {"key": "ch1", "name": "1. 前言 (Introduction)", "prompt": "背景、目的、範圍 (Scope)"},
+            {"key": "ch2", "name": "2. 文獻回顧 (Literature Review)", "prompt": "相關研究與假說推導"},
+            {"key": "ch3", "name": "3. 研究方法 (Methodology)", "prompt": "方法與設計 (不含結果)"},
+            {"key": "ch4", "name": "4. 研究結果 (Results)", "prompt": "數據分析與圖表"},
+            {"key": "ch5", "name": "5. 討論與結論 (Discussion)", "prompt": "意涵、研究限制 (Limitations)、未來建議"}
+        ]
+
+    # 關鍵字
     st.markdown("#### 關鍵字 (可複選)")
     business_keywords = [
-        "策略管理", "競爭優勢", "商業模式", "數位轉型", "ESG", "永續發展", 
-        "消費者行為", "顧客滿意度", "服務品質", "品牌形象",
-        "人力資源", "教育訓練", "組織承諾", "領導統御", "工作績效",
-        "供應鏈管理", "風險管理", "金融科技", "AI應用", "多準則決策"
+        "策略管理", "競爭優勢", "ESG", "永續發展", 
+        "消費者行為", "滿意度", "服務品質", 
+        "人力資源", "教育訓練", "組織承諾", 
+        "供應鏈管理", "金融科技", "AI應用", "多準則決策"
     ]
     selected_kws = st.multiselect("勾選：", business_keywords)
     custom_kw = st.text_input("自訂補充：")
@@ -146,13 +148,12 @@ with st.sidebar:
         )
         final_method = f"多準則決策 ({' + '.join(mcdm_tools)})" if mcdm_tools else "多準則決策"
         
-        st.divider()
         st.markdown("#### 🏗️ 架構設定")
         num_dims = st.number_input("構面數量", 2, 10, 3)
         num_crits = st.number_input("準則數量(每構面)", 2, 10, 4)
 
 # --- 主畫面 ---
-st.title("🎓 論文寫作助手 (學術邏輯嚴謹版)")
+st.title("🎓 論文寫作助手 (格式優化版)")
 
 if not api_key: st.warning("請先輸入 API Key"); st.stop()
 
@@ -163,7 +164,12 @@ if st.session_state.step == 0:
         if not keywords_str: st.error("請選擇或輸入關鍵字")
         else:
             with st.spinner("構思中..."):
-                prompt = f"關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文學術題目。"
+                prompt = f"""
+                關鍵字：{keywords_str}
+                研究方法：{final_method}
+                寫作格式：{paper_type}
+                請產生 3 個繁體中文學術題目。
+                """
                 res = ask_gemini(prompt, api_key, selected_model)
                 titles = [t.strip() for t in res.split('\n') if t.strip() and not t.startswith("Here")]
                 clean_titles = []
@@ -183,7 +189,7 @@ if st.session_state.step == 0:
 # === 步驟 1: 文獻 ===
 elif st.session_state.step == 1:
     st.subheader("步驟 1：導入真實文獻")
-    st.info("請貼上華藝或 Google 學術的真實文獻資料。這是整篇論文的基礎。")
+    st.info("請貼上華藝或 Google 學術的真實文獻資料。")
     raw_refs = st.text_area("📋 文獻資料貼上區：", height=300)
     
     if st.button("✅ 確認文獻，下一步"):
@@ -193,21 +199,21 @@ elif st.session_state.step == 1:
             st.session_state.step = 1.5 
             st.rerun()
 
-# === 步驟 1.5: 架構 ===
+# === 步驟 1.5: 架構 & 圖 (強制直式) ===
 elif st.session_state.step == 1.5:
     st.subheader("步驟 1.5：建構評估指標體系")
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.markdown("### 📝 文字架構 (MCDM)")
+        st.markdown("### 📝 文字架構")
         if not st.session_state.framework:
-            if st.button("⚡ 依照文獻產生架構建議"):
+            if st.button("⚡ 產生架構文字"):
                 with st.spinner("分析中..."):
                     prompt = f"""
                     題目：{st.session_state.final_title}
                     文獻：{st.session_state.refs}
                     任務：建立評估指標體系 ({num_dims}構面 x {num_crits}準則)。
-                    請務必參考文獻中的構面，輸出 Markdown 列表。
+                    請輸出 Markdown 列表。
                     """
                     st.session_state.framework = ask_gemini(prompt, api_key, selected_model)
                     st.rerun()
@@ -216,9 +222,31 @@ elif st.session_state.step == 1.5:
             edited_framework = st.text_area("編輯架構：", value=st.session_state.framework, height=400)
             if edited_framework != st.session_state.framework:
                 st.session_state.framework = edited_framework
-    
+            
+            if st.button("📊 繪製直式架構圖"):
+                with st.spinner("繪圖中..."):
+                    graph_prompt = f"""
+                    請根據以下架構，生成 Graphviz DOT 代碼。
+                    架構：{st.session_state.framework}
+                    要求：
+                    1. **設定 rankdir=TB (Top-to-Bottom) 以符合 A4 頁面。**
+                    2. 層級圖 (Hierarchy)。
+                    3. 繁體中文。
+                    4. 只回傳 DOT 代碼。
+                    """
+                    code_res = ask_gemini(graph_prompt, api_key, selected_model)
+                    st.session_state.framework_dot = clean_graphviz_code(code_res)
+                    st.rerun()
+
     with col2:
-        st.info("此階段僅確認文字架構。詳細的架構圖將在「第二章」撰寫完畢後生成，以符合學術邏輯。")
+        st.markdown("### 🖼️ 架構圖預覽 (直式)")
+        if st.session_state.framework_dot:
+            try: 
+                st.graphviz_chart(st.session_state.framework_dot)
+                st.success("圖表已轉為直式 (符合 A4 比例)！")
+            except Exception as e: 
+                st.error(f"圖表生成失敗：{e}")
+                st.code(st.session_state.framework_dot)
 
     if st.session_state.framework:
         st.markdown("---")
@@ -228,15 +256,16 @@ elif st.session_state.step == 1.5:
 
 # === 步驟 2: 大綱 ===
 elif st.session_state.step == 2:
-    st.subheader("步驟 2：生成大綱")
+    st.subheader(f"步驟 2：生成大綱 ({paper_type})")
     if st.button("📝 生成大綱"):
         with st.spinner("規劃中..."):
             prompt = f"""
-            題目：{st.session_state.final_title}。
-            方法：{final_method}。
-            架構：{st.session_state.framework}。
-            請寫出五章大綱。
-            **注意：研究架構圖與假說推導應安排在第二章末尾或第三章開頭，第一章僅做背景介紹。**
+            題目：{st.session_state.final_title}
+            方法：{final_method}
+            格式：{paper_type}
+            架構：{st.session_state.framework}
+            請寫出大綱。
+            **注意：第一章寫研究範圍，第五章才寫研究限制。**
             """
             st.session_state.outline = ask_gemini(prompt, api_key, selected_model)
             st.rerun()
@@ -247,7 +276,7 @@ elif st.session_state.step == 2:
             st.session_state.step = 3
             st.rerun()
 
-# === 步驟 3: 逐章寫作 (核心修正：邏輯與圖表) ===
+# === 步驟 3: 逐章寫作 (邏輯修正) ===
 elif st.session_state.step == 3:
     
     current_idx = st.session_state.current_ch_index
@@ -258,7 +287,7 @@ elif st.session_state.step == 3:
         ch_name = curr_ch["name"]
         
         st.subheader(f"✍️ 寫作進度：{ch_name}")
-        st.info(f"重點：{curr_ch['desc']}")
+        st.info(f"重點：{curr_ch['prompt']}")
         
         current_content = st.session_state.content.get(ch_key, "")
         
@@ -266,69 +295,54 @@ elif st.session_state.step == 3:
             if st.button(f"🚀 開始撰寫 {ch_name}"):
                 with st.spinner(f"AI 正在撰寫 {ch_name}..."):
                     
-                    # 根據章節加入特殊指令
                     extra_instruction = ""
-                    
-                    if "第一章" in ch_name:
-                        extra_instruction = """
-                        **【嚴格禁止】**：本章絕對不可出現「研究架構圖」或詳細的構面準則表。這些應保留至第二章推導後呈現。
-                        本章重點在於：研究背景、動機、目的、研究流程。
-                        """
-                    
+                    # 根據正確的學術位置加入指令
+                    if "第一章" in ch_name or "緒論" in ch_name:
+                        extra_instruction = "請明確界定「研究範圍與限制 (Scope and Delimitations)」，即本研究不做什麼。"
                     elif "第二章" in ch_name:
-                        # 這裡注入您要求的學術規範
-                        extra_instruction = f"""
-                        {ACADEMIC_RULES_CH2}
-                        **任務**：
-                        1. 最後必須歸納出本研究的「觀念性架構 (Conceptual Framework)」。
-                        2. 必須包含一個「構面/準則與來源文獻對照表」。
-                        """
-                    
+                        extra_instruction = f"最後必須歸納出觀念性架構圖。{ACADEMIC_RULES_CH2 if 'ACADEMIC_RULES_CH2' in globals() else ''}"
+                    elif "第三章" in ch_name:
+                        extra_instruction = "請描述方法步驟與工具，**不要**在此章節探討研究結果的限制。"
+                    elif "第五章" in ch_name or "結論" in ch_name:
+                        extra_instruction = "請包含「研究限制與未來建議 (Limitations and Future Research)」，檢討本研究執行過程中的不足。"
                     elif "第四章" in ch_name:
-                        extra_instruction = "請模擬豐富且顯著的數據，使用 Markdown 表格。針對 MCDM 方法進行分析（如權重、因果圖）。"
+                        extra_instruction = "模擬豐富顯著數據，使用 Markdown 表格。生成 DOT 圖碼時請設為直式 (rankdir=TB)。"
+                        # 順便畫圖
+                        graph_p = f"針對 {final_method} 分析結果，畫出直式(TB)關係圖。回傳 DOT code。"
+                        code = ask_gemini(graph_p, api_key, selected_model)
+                        st.session_state.graph_code = clean_graphviz_code(code)
 
                     prompt = f"""
                     請撰寫「{ch_name}」。
                     題目：{st.session_state.final_title}
+                    格式：{paper_type}
                     方法：{final_method}
                     架構：{st.session_state.framework}
                     文獻：{st.session_state.refs}
                     
                     {extra_instruction}
-                    
                     要求：繁體中文，學術語氣。
                     """
                     res = ask_gemini(prompt, api_key, selected_model)
                     st.session_state.content[ch_key] = res
                     
-                    # 自動生成圖表 (視章節而定)
+                    # 第二章也要畫架構圖
                     if "第二章" in ch_name:
-                        # 第二章結束時，畫「觀念架構圖」
-                        graph_p = f"根據以下確認的架構，繪製 Graphviz DOT 層級圖 (Hierarchy Tree)：\n{st.session_state.framework}\n要求：繁體中文，只回傳DOT代碼。"
+                        graph_p = f"根據架構 {st.session_state.framework}，繪製直式(TB)觀念架構圖。回傳 DOT code。"
                         code = ask_gemini(graph_p, api_key, selected_model)
                         st.session_state.concept_map_code = clean_graphviz_code(code)
-                    
-                    if "第四章" in ch_name:
-                        # 第四章結束時，畫「分析結果圖」
-                        graph_p = f"針對 {final_method} 的分析結果，繪製示意圖 (如因果圖或權重圖)。回傳 DOT 代碼。"
-                        code = ask_gemini(graph_p, api_key, selected_model)
-                        st.session_state.graph_code = clean_graphviz_code(code)
                     
                     st.rerun()
         
         else:
-            # 顯示內容與圖表
             st.markdown("### 📖 章節預覽")
             st.markdown(current_content)
             
-            # 顯示第二章的架構圖
             if "第二章" in ch_name and st.session_state.concept_map_code:
-                st.markdown("#### 📊 本研究觀念性架構圖 (Conceptual Framework)")
-                st.caption("說明：此圖為根據文獻回顧歸納後之架構。")
+                st.markdown("#### 📊 觀念性架構圖")
                 try: st.graphviz_chart(st.session_state.concept_map_code)
                 except: pass
             
-            # 顯示第四章的結果圖
             if "第四章" in ch_name and st.session_state.graph_code:
                 st.markdown("#### 📊 分析結果示意圖")
                 try: st.graphviz_chart(st.session_state.graph_code)
@@ -357,7 +371,7 @@ elif st.session_state.step == 3:
             st.session_state.step = 4
             st.rerun()
 
-# === 步驟 4: 最終整理 ===
+# === 步驟 4: 最終整理 & 下載 (多樣化) ===
 elif st.session_state.step == 4:
     st.subheader("步驟 4：最終整理與下載")
     
@@ -370,10 +384,12 @@ elif st.session_state.step == 4:
     
     if st.session_state.apa_refs:
         st.markdown("### 📥 下載選項")
+        
         chapter_options = {ch['key']: ch['name'] for ch in CHAPTERS}
         chapter_options['ref'] = "參考文獻 (APA)"
         selected_chapters = st.multiselect("勾選下載章節", list(chapter_options.keys()), default=list(chapter_options.keys()))
         
+        # 組裝內容
         final_text = f"# {st.session_state.final_title}\n\n"
         for ch in CHAPTERS:
             if ch['key'] in selected_chapters:
@@ -381,6 +397,22 @@ elif st.session_state.step == 4:
         if "ref" in selected_chapters:
             final_text += "\n\n## 參考文獻\n" + st.session_state.apa_refs
         
-        with st.expander("預覽全文"):
-            st.markdown(final_text)
-        st.download_button("📥 下載檔案", final_text, "Thesis_Final.md")
+        # --- 新增：下載格式選擇 ---
+        download_format = st.radio("選擇下載格式：", ["Markdown (.md)", "純文字 (.txt)", "HTML (可 Word 開啟)"])
+        
+        if download_format == "Markdown (.md)":
+            st.download_button("📥 下載 Markdown", final_text, "Thesis.md")
+        elif download_format == "純文字 (.txt)":
+            st.download_button("📥 下載 TXT", final_text, "Thesis.txt")
+        elif download_format == "HTML (可 Word 開啟)":
+            # 簡單包裝成 HTML
+            html_content = f"""
+            <html>
+            <head><meta charset='utf-8'></head>
+            <body>
+            <h1>{st.session_state.final_title}</h1>
+            <pre>{final_text}</pre>
+            </body>
+            </html>
+            """
+            st.download_button("📥 下載 HTML", html_content, "Thesis.html", mime="text/html")
