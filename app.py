@@ -3,7 +3,7 @@ import google.generativeai as genai
 import os
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (Gemini版)", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="論文寫作助手 (Gemini Pro版)", layout="wide", page_icon="🎓")
 
 # --- 初始化 ---
 if 'step' not in st.session_state: st.session_state.step = 1
@@ -14,11 +14,11 @@ if 'outline' not in st.session_state: st.session_state.outline = ""
 # --- 處理 API Key (智慧切換模式) ---
 api_key = None
 
-# 1. 先嘗試從 Streamlit Secrets 讀取 (給朋友用的方便模式)
+# 1. 先嘗試從 Streamlit Secrets 讀取
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
     
-# 2. 如果 Secrets 沒設定，才顯示輸入框 (備用模式)
+# 2. 如果 Secrets 沒設定，才顯示輸入框
 with st.sidebar:
     st.header("1. 引擎設定")
     if api_key:
@@ -39,19 +39,20 @@ with st.sidebar:
     topic = st.text_input("研究題目/關鍵字", "例如：生成式AI對大學生學習成效之影響")
     method = st.selectbox("研究方法", ["問卷調查法", "深度訪談法", "實驗法", "文獻分析法"])
 
-# --- 核心寫作函式 ---
+# --- 核心寫作函式 (修正為 gemini-pro) ---
 def ask_gemini(prompt):
     if not api_key:
         return "⚠️ 請先設定 API Key"
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # 【修正重點】改用最穩定的 gemini-pro 模型
+        model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         return f"發生錯誤：{str(e)}"
 
 # --- 主畫面 ---
-st.title("🎓 論文寫作助手 (Gemini 強力驅動版)")
+st.title("🎓 論文寫作助手 (Gemini Pro 強力驅動版)")
 st.markdown("此工具由 Google Gemini AI 驅動，協助您從零開始撰寫論文。")
 
 if not api_key:
@@ -69,8 +70,9 @@ if st.session_state.step == 1:
             2. 根據這些文獻，推導出一個具體的「研究缺口」。
             3. 說明這個缺口的研究價值。
             """
-            st.session_state.refs = ask_gemini(prompt)
-            st.rerun() # 自動刷新顯示結果
+            result = ask_gemini(prompt)
+            st.session_state.refs = result
+            st.rerun()
             
     if st.session_state.refs:
         st.markdown(st.session_state.refs)
@@ -89,7 +91,8 @@ elif st.session_state.step == 2:
             文獻基礎：{st.session_state.refs}
             請撰寫完整論文大綱 (包含五章節重點)。
             """
-            st.session_state.outline = ask_gemini(prompt)
+            result = ask_gemini(prompt)
+            st.session_state.outline = result
             st.rerun()
             
     st.markdown(st.session_state.outline)
