@@ -4,44 +4,19 @@ import json
 import re
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (全功能合體版)", layout="wide", page_icon="📊")
+st.set_page_config(page_title="論文寫作助手 (互動修正版)", layout="wide", page_icon="✍️")
 
-# --- 核心 1: 掃描模型功能 (加回來了！) ---
-def get_available_models(api_key):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            model_list = []
-            if 'models' in data:
-                for m in data['models']:
-                    # 只抓取支援生成內容的模型
-                    if 'generateContent' in m.get('supportedGenerationMethods', []):
-                        clean_name = m['name'].replace('models/', '')
-                        model_list.append(clean_name)
-            return model_list
-        return None
-    except:
-        return None
-
-# --- 核心 2: 寫作函式 ---
+# --- 核心連線函式 ---
 def ask_gemini(prompt, api_key, model_name):
     if not api_key: return "⚠️ 請設定 Key"
-    
-    real_model_name = model_name
-    if "models/" not in model_name:
-        real_model_name = f"models/{model_name}"
-        
+    real_model_name = f"models/{model_name}" if "models/" not in model_name else model_name
     url = f"https://generativelanguage.googleapis.com/v1beta/{real_model_name}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     data = { "contents": [{ "parts": [{"text": prompt}] }] }
-    
     try:
         response = requests.post(url, headers=headers, json=data)
         if response.status_code == 200:
-            try:
-                return response.json()['candidates'][0]['content']['parts'][0]['text']
+            try: return response.json()['candidates'][0]['content']['parts'][0]['text']
             except: return "⚠️ 生成成功但解析失敗"
         elif response.status_code == 429: return "⏳ 速度限制 (429)，請稍候 20 秒..."
         elif response.status_code == 404: return f"❌ 模型錯誤 (404): {model_name} 不存在。"
@@ -52,104 +27,57 @@ def ask_gemini(prompt, api_key, model_name):
 if 'step' not in st.session_state: st.session_state.step = 0
 if 'proposed_titles' not in st.session_state: st.session_state.proposed_titles = []
 if 'final_title' not in st.session_state: st.session_state.final_title = ""
-if 'refs' not in st.session_state: st.session_state.refs = ""
+if 'refs' not in st.session_state: st.session_state.refs = "" # 文獻
 if 'outline' not in st.session_state: st.session_state.outline = ""
-if 'content' not in st.session_state: st.session_state.content = {}
-if 'graph_code' not in st.session_state: st.session_state.graph_code = ""
-if 'my_models' not in st.session_state: st.session_state.my_models = []
+if 'content' not in st.session_state: st.session_state.content = {} # 各章內容
+if 'user_feedback' not in st.session_state: st.session_state.user_feedback = "" # 您的建議
+if 'apa_refs' not in st.session_state: st.session_state.apa_refs = "" # APA列表
 
 # --- 側邊欄 ---
 api_key = None
-if "GOOGLE_API_KEY" in st.secrets:
-    api_key = st.secrets["GOOGLE_API_KEY"]
+if "GOOGLE_API_KEY" in st.secrets: api_key = st.secrets["GOOGLE_API_KEY"]
 
 with st.sidebar:
     st.header("⚙️ 1. 引擎設定")
     if not api_key:
         user_key = st.text_input("API Key", type="password")
         if user_key: api_key = user_key
-    
-    if api_key:
-        st.success("✅ 金鑰已載入")
-        
-        # --- 【這裡！搜尋按鈕回來了】 ---
-        col_scan, col_msg = st.columns([1, 2])
-        with col_scan:
-            if st.button("🔄 搜尋模型"):
-                found = get_available_models(api_key)
-                if found: 
-                    st.session_state.my_models = found
-                    st.success("成功！")
-                else:
-                    st.error("失敗")
-
-    # 模型選擇邏輯：如果有掃描到就用掃描的，沒有就用預設清單
-    model_options = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
-    if st.session_state.my_models:
-        model_options = st.session_state.my_models
+    if api_key: st.success("✅ 金鑰已載入")
 
     st.markdown("### 選擇模型")
-    
-    # 自動選一個包含 flash 的當預設值
-    default_index = 0
-    for i, m in enumerate(model_options):
-        if 'flash' in m: default_index = i
-        
-    selected_model = st.selectbox("請選擇", model_options, index=default_index)
+    selected_model = st.selectbox("模型", ["gemini-1.5-flash", "gemini-1.5-pro"], index=0)
     
     st.divider()
-    
-    # 5 個關鍵字輸入框
-    st.markdown("### 輸入關鍵字 (請填寫)")
+    st.markdown("### 關鍵字 (5格)")
     k1 = st.text_input("關鍵字 1", value="")
     k2 = st.text_input("關鍵字 2", value="")
     k3 = st.text_input("關鍵字 3", value="")
     k4 = st.text_input("關鍵字 4", value="")
     k5 = st.text_input("關鍵字 5", value="")
-    
-    raw_keywords = [k1, k2, k3, k4, k5]
-    active_keywords = [k for k in raw_keywords if k.strip()] 
-    keywords_str = ", ".join(active_keywords)
+    keywords_str = ", ".join([k for k in [k1, k2, k3, k4, k5] if k.strip()])
 
     st.divider()
-
-    # 方法選擇
-    method_category = st.selectbox("研究途徑", 
-        ["多準則決策 (MCDM)", "量化研究 (SEM/回歸)", "質性研究"]
-    )
-    
+    method_category = st.selectbox("研究途徑", ["多準則決策 (MCDM)", "量化研究 (SEM/回歸)", "質性研究", "實驗法"])
     final_method = method_category
     if method_category == "多準則決策 (MCDM)":
-        mcdm_tool = st.selectbox("選擇具體方法", 
-            ["AHP (層級分析法)", "ANP", "DEMATEL", "FCM (模糊認知圖)", "TOPSIS", "VIKOR", "Fuzzy AHP", "DANP"]
-        )
+        mcdm_tool = st.selectbox("MCDM 方法", ["AHP", "ANP", "DEMATEL", "FCM (模糊認知圖)", "TOPSIS", "VIKOR", "Fuzzy AHP", "DANP"])
         final_method = f"多準則決策 - {mcdm_tool}"
 
-# --- 主畫面邏輯 ---
-st.title("📊 論文寫作助手 (全功能合體版)")
+# --- 主畫面 ---
+st.title("✍️ 論文寫作助手 (互動修正 + APA版)")
 
-if not api_key:
-    st.warning("請先輸入 API Key")
-    st.stop()
+if not api_key: st.warning("請先輸入 API Key"); st.stop()
 
-# === 步驟 0: 產生題目 ===
+# === 步驟 0: 題目 ===
 if st.session_state.step == 0:
-    st.subheader("步驟 0：根據關鍵字構思題目")
-    
-    if keywords_str: st.info(f"關鍵字：{keywords_str}")
-
-    if st.button("✨ 產生 3 個建議題目"):
-        if not keywords_str:
-            st.error("請先輸入關鍵字！")
+    st.subheader("步驟 0：構思題目")
+    if st.button("✨ 產生建議題目"):
+        if not keywords_str: st.error("請輸入關鍵字")
         else:
-            with st.spinner("AI 構思中..."):
-                prompt = f"""
-                關鍵字：{keywords_str}
-                研究方法：{final_method}
-                請產生 3 個具有學術深度的繁體中文論文題目。只列出題目。
-                """
+            with st.spinner("構思中..."):
+                prompt = f"關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文學術題目，不要解釋。"
                 res = ask_gemini(prompt, api_key, selected_model)
-                titles = [t.strip() for t in res.split('\n') if t.strip()]
+                titles = [t.strip() for t in res.split('\n') if t.strip() and not t.startswith("Here")]
                 clean_titles = []
                 for t in titles:
                     clean_t = re.sub(r'^\d+\.\s*', '', t).replace('*', '').strip()
@@ -158,179 +86,177 @@ if st.session_state.step == 0:
                 st.rerun()
 
     if st.session_state.proposed_titles:
-        st.write("請選擇一個最符合您想法的題目：")
-        chosen = st.radio("建議題目：", st.session_state.proposed_titles)
-        if st.button("🔒 鎖定此題目，下一步"):
+        chosen = st.radio("選擇題目：", st.session_state.proposed_titles)
+        if st.button("🔒 鎖定題目，下一步"):
             st.session_state.final_title = chosen
             st.session_state.step = 1
             st.rerun()
 
-# === 步驟 1: 文獻 (強制中文) ===
+# === 步驟 1: 文獻 (真實性檢核) ===
 elif st.session_state.step == 1:
-    st.subheader(f"步驟 1：建立中文文獻庫")
-    st.caption(f"題目：{st.session_state.final_title}")
+    st.subheader("步驟 1：建立與確認文獻")
+    st.info("💡 請注意：AI 找到的文獻可能是虛構的。請您在下方文字框中「手動修改」或「確認」文獻是否真實，再按下一步。")
     
-    if st.button("📚 搜尋繁體中文文獻"):
-        with st.spinner("正在搜尋台灣學術資料庫..."):
-            prompt = f"""
-            題目：{st.session_state.final_title}
-            方法：{final_method}
-            
-            請列出 **10-15 筆** 重要學術文獻。
-            **嚴格要求：**
-            1. **必須主要包含「繁體中文」文獻** (例如：管理評論、中山管理評論、台大管理論叢等)。
-            2. 可以搭配少量經典英文文獻。
-            3. 格式：[年份] 作者 - 篇名 (主要觀點)
-            
-            最後根據這些文獻，推導出研究缺口。
-            """
-            st.session_state.refs = ask_gemini(prompt, api_key, selected_model)
-            st.rerun()
-            
+    if not st.session_state.refs:
+        if st.button("📚 初步搜尋繁體中文文獻"):
+            with st.spinner("搜尋中..."):
+                prompt = f"""
+                題目：{st.session_state.final_title}
+                方法：{final_method}
+                
+                請列出 10-15 筆繁體中文學術文獻 (管理評論, 臺大管理論叢等) 與少量英文經典。
+                格式：[年份] 作者 - 篇名
+                並說明研究缺口。
+                """
+                st.session_state.refs = ask_gemini(prompt, api_key, selected_model)
+                st.rerun()
+    
+    # --- 這裡是可以修改的 ---
     if st.session_state.refs:
-        st.markdown(st.session_state.refs)
-        if st.button("下一步：生成大綱"):
+        st.write("▼ 請在此修改/確認文獻的正確性：")
+        edited_refs = st.text_area("文獻列表編輯區", value=st.session_state.refs, height=300)
+        
+        if st.button("✅ 確認文獻無誤，生成大綱"):
+            st.session_state.refs = edited_refs # 儲存修改後的版本
             st.session_state.step = 2
             st.rerun()
 
 # === 步驟 2: 大綱 ===
 elif st.session_state.step == 2:
-    st.subheader("步驟 2：邏輯架構大綱")
-    if st.button("📝 生成章節大綱"):
-        with st.spinner("規劃大綱中..."):
-            prompt = f"""
-            題目：{st.session_state.final_title}
-            方法：{final_method}
-            文獻基礎：{st.session_state.refs}
-            
-            請寫出五章節的詳細大綱。
-            第四章必須規劃如何呈現「視覺化圖表」與數據結果。
-            """
+    st.subheader("步驟 2：生成大綱")
+    if st.button("📝 生成大綱"):
+        with st.spinner("規劃中..."):
+            prompt = f"題目：{st.session_state.final_title}。方法：{final_method}。文獻：{st.session_state.refs}。請寫出五章大綱，第四章需包含圖表規劃。"
             st.session_state.outline = ask_gemini(prompt, api_key, selected_model)
             st.rerun()
             
     if st.session_state.outline:
         st.markdown(st.session_state.outline)
-        if st.button("下一步：開始撰寫內文"):
+        if st.button("下一步：開始撰寫"):
             st.session_state.step = 3
             st.rerun()
 
-# === 步驟 3: 寫作 (含視覺化) ===
+# === 步驟 3: 撰寫 (數據增強) ===
 elif st.session_state.step == 3:
-    st.subheader("步驟 3：撰寫與視覺化")
-    st.info(f"題目：{st.session_state.final_title} | 方法：{final_method}")
+    st.subheader("步驟 3：分章撰寫")
+    st.caption("請依序撰寫。第四章將會增強數據。")
     
-    tabs = st.tabs(["第一章", "第二章 (文獻)", "第三章 (方法)", "第四章 (結果圖表)", "第五章"])
+    tabs = st.tabs(["第一章", "第二章", "第三章", "第四章(增強數據)", "第五章"])
     
-    # --- 第一章 ---
+    def write_ch(ch, extra=""):
+        return ask_gemini(f"撰寫「{ch}」。題目：{st.session_state.final_title}。方法：{final_method}。大綱：{st.session_state.outline}。{extra} 要求：繁體中文，學術語氣。", api_key, selected_model)
+
     with tabs[0]:
         if st.button("✍️ 寫第一章"):
-            prompt = f"""
-            寫第一章：緒論。
-            題目：{st.session_state.final_title}
-            文獻缺口：{st.session_state.refs}
-            要求：清楚定義研究背景、動機、目的。繁體中文，學術語氣。
-            """
             with st.spinner("寫作中..."):
-                st.session_state.content['ch1'] = ask_gemini(prompt, api_key, selected_model)
-                st.rerun()
+                st.session_state.content['ch1'] = write_ch("第一章 緒論", "包含背景、動機、目的")
         if 'ch1' in st.session_state.content: st.markdown(st.session_state.content['ch1'])
 
-    # --- 第二章 (強制引用) ---
     with tabs[1]:
-        st.info("💡 強制使用「文中引用」格式，例如：(王小明, 2023)。")
         if st.button("✍️ 寫第二章"):
-            prompt = f"""
-            寫第二章：文獻探討。
-            題目：{st.session_state.final_title}
-            參考文獻列表：{st.session_state.refs}
-            
-            **嚴格要求**：
-            1. 必須引用上述提供的中文文獻。
-            2. **每一段論述後都要加上引用來源**，格式如：(張三, 2022)。
-            3. 文獻對話與評析。
-            """
             with st.spinner("寫作中..."):
-                st.session_state.content['ch2'] = ask_gemini(prompt, api_key, selected_model)
-                st.rerun()
+                st.session_state.content['ch2'] = write_ch("第二章 文獻探討", f"必須強制使用文中引用，參考：{st.session_state.refs}")
         if 'ch2' in st.session_state.content: st.markdown(st.session_state.content['ch2'])
 
-    # --- 第三章 ---
     with tabs[2]:
         if st.button("✍️ 寫第三章"):
-            prompt = f"""
-            寫第三章：研究方法。
-            方法：{final_method}
-            
-            要求：
-            1. **禁止使用 LaTeX**，改用 Markdown 表格呈現數學步驟。
-            2. 詳細說明運算邏輯。
-            """
             with st.spinner("寫作中..."):
-                st.session_state.content['ch3'] = ask_gemini(prompt, api_key, selected_model)
-                st.rerun()
+                st.session_state.content['ch3'] = write_ch("第三章 研究方法", f"詳細說明 {final_method} 步驟與公式，不要用 LaTeX。")
         if 'ch3' in st.session_state.content: st.markdown(st.session_state.content['ch3'])
 
-    # --- 第四章 (視覺化核心) ---
     with tabs[3]:
-        st.warning(f"⚠️ 這裡將生成 {final_method} 的分析結果與圖表。")
-        
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            if st.button("✍️ 撰寫第四章文字"):
-                prompt = f"""
-                寫第四章：資料分析與結果。
-                題目：{st.session_state.final_title}
-                方法：{final_method}
-                
-                要求：
-                1. **禁止使用 LaTeX 語法**，矩陣請用 Markdown 表格呈現。
-                2. 模擬完整數據分析結果。
+        st.info("💡 這一章 AI 會模擬較高的分數與顯著的數據結果。")
+        if st.button("✍️ 寫第四章 (數據增強版)"):
+            with st.spinner("模擬高顯著性數據中..."):
+                extra_prompt = """
+                **數據模擬特別要求**：
+                1. 模擬的問卷或專家評分數據要「豐富」且「分數較高」，顯示出顯著的結果。
+                2. 請提供詳細的 Markdown 表格 (例如：權重表、排序表、滿意度表)。
+                3. 請針對數據進行深入解釋，證明結果有效。
+                4. 不要使用 LaTeX。
                 """
-                with st.spinner("模擬數據中..."):
-                    st.session_state.content['ch4'] = ask_gemini(prompt, api_key, selected_model)
-                    st.rerun()
-        
-        with col2:
-            if st.button("📊 繪製關聯圖"):
-                with st.spinner("繪製中..."):
-                    graph_prompt = f"""
-                    請針對題目「{st.session_state.final_title}」和方法「{final_method}」，
-                    生成一段 Graphviz DOT 語言程式碼。
-                    情境：模擬關鍵因素的因果關係圖或層級圖。
-                    要求：只回傳 DOT 代碼，不要其他文字，節點用繁體中文。
-                    """
-                    code_res = ask_gemini(graph_prompt, api_key, selected_model)
-                    clean_code = code_res.replace("```dot", "").replace("```", "").strip()
-                    st.session_state.graph_code = clean_code
-                    st.rerun()
+                st.session_state.content['ch4'] = write_ch("第四章 資料分析與結果", extra_prompt)
+        if 'ch4' in st.session_state.content: st.markdown(st.session_state.content['ch4'])
 
-        if 'ch4' in st.session_state.content: 
-            st.markdown(st.session_state.content['ch4'])
-        
-        st.divider()
-        
-        if st.session_state.graph_code:
-            st.markdown("### 📊 視覺化圖表")
-            try:
-                st.graphviz_chart(st.session_state.graph_code)
-            except:
-                st.error("圖表生成失敗")
-                st.code(st.session_state.graph_code)
-
-    # --- 第五章 ---
     with tabs[4]:
         if st.button("✍️ 寫第五章"):
-            prompt = f"""
-            寫第五章：結論。
-            題目：{st.session_state.final_title}
-            依據第四章結果，提出管理意涵。
-            """
-            with st.spinner("撰寫中..."):
-                st.session_state.content['ch5'] = ask_gemini(prompt, api_key, selected_model)
-                st.rerun()
+            with st.spinner("寫作中..."):
+                # 這裡先寫一個初版，後面可以依照用戶意見改
+                st.session_state.content['ch5'] = write_ch("第五章 結論", "依據第四章結果撰寫結論與建議。")
         if 'ch5' in st.session_state.content: st.markdown(st.session_state.content['ch5'])
 
     st.divider()
-    full_text = f"# {st.session_state.final_title}\n\n" + "\n\n".join(st.session_state.content.values())
-    st.download_button("📥 下載完整論文", full_text, "Thesis.md")
+    if len(st.session_state.content) >= 1:
+        if st.button("下一步：加入我的意見並生成參考文獻"):
+            st.session_state.step = 4
+            st.rerun()
+
+# === 步驟 4: 用戶意見修正 & APA ===
+elif st.session_state.step == 4:
+    st.subheader("步驟 4：總體建議與 APA 文獻生成")
+    
+    st.success("前五章初稿已完成。現在請輸入您的意見，讓 AI 重新修整論文。")
+    
+    # 1. 用戶意見輸入區
+    user_feedback = st.text_area(
+        "📝 請輸入您的修改建議 (例如：結論要強調... / 第四章的數據要再... / 增加某個觀點)：",
+        placeholder="例如：我覺得訓練成效對向心力的影響要再強調一點，另外建議企業可以多舉辦戶外活動...",
+        height=150
+    )
+    
+    if st.button("🚀 依照我的意見重新修整 & 生成 APA 列表"):
+        if not user_feedback:
+            st.error("請輸入您的意見，如果沒有意見請輸入『無』。")
+        else:
+            with st.spinner("正在依照您的意見重寫結論並整理 APA..."):
+                
+                # A. 重寫第五章 (加入用戶觀點)
+                refine_prompt = f"""
+                請重寫「第五章 結論與建議」。
+                題目：{st.session_state.final_title}
+                目前的結論初稿：{st.session_state.content.get('ch5', '')}
+                
+                **用戶的重要意見 (必須融入)**：
+                {user_feedback}
+                
+                要求：
+                1. 根據用戶意見，補充或修改結論與管理意涵。
+                2. 語氣保持學術專業。
+                """
+                new_ch5 = ask_gemini(refine_prompt, api_key, selected_model)
+                st.session_state.content['ch5'] = new_ch5
+                
+                # B. 生成 APA 參考文獻
+                apa_prompt = f"""
+                請根據以下這份文獻列表，整理成標準的 **APA 第七版 (APA 7th Edition)** 參考文獻格式。
+                文獻列表：
+                {st.session_state.refs}
+                
+                要求：
+                1. 標題為「參考文獻」。
+                2. 按照字母/筆畫順序排列。
+                3. 格式要精準 (斜體、括號等)。
+                """
+                st.session_state.apa_refs = ask_gemini(apa_prompt, api_key, selected_model)
+                
+                st.success("修正完成！已更新第五章並加入 APA 文獻。")
+                st.rerun()
+
+    # 顯示最終結果
+    if st.session_state.apa_refs:
+        st.markdown("---")
+        st.subheader("最終論文預覽")
+        
+        # 組合全文
+        full_text = f"# {st.session_state.final_title}\n\n"
+        full_text += st.session_state.content.get('ch1', '') + "\n\n"
+        full_text += st.session_state.content.get('ch2', '') + "\n\n"
+        full_text += st.session_state.content.get('ch3', '') + "\n\n"
+        full_text += st.session_state.content.get('ch4', '') + "\n\n"
+        full_text += st.session_state.content.get('ch5', '') + "\n\n"
+        full_text += "\n\n" + st.session_state.apa_refs
+        
+        st.text_area("修正後的第五章", st.session_state.content.get('ch5', ''), height=300)
+        st.text_area("APA 參考文獻", st.session_state.apa_refs, height=300)
+        
+        st.download_button("📥 下載最終完整論文 (含您的意見)", full_text, "Final_Thesis_APA.md")
