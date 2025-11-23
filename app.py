@@ -128,7 +128,7 @@ with st.sidebar:
     if st.button("重置所有內容"):
         st.session_state.step = 1
         st.session_state.final_outline = ""
-        st.experimental_rerun()
+        st.rerun()  # <--- 已修正為 st.rerun()
 
 # 3. 主畫面流程
 
@@ -145,7 +145,7 @@ if st.session_state.step == 1:
     if st.button("下一步：輸入文獻"):
         st.session_state.selected_gap = selected_gap
         st.session_state.step = 2
-        st.experimental_rerun()
+        st.rerun()  # <--- 已修正為 st.rerun()
 
 # === 步驟二：輸入文獻 ===
 elif st.session_state.step == 2:
@@ -160,12 +160,12 @@ elif st.session_state.step == 2:
     with col1:
         if st.button("上一步"):
             st.session_state.step = 1
-            st.experimental_rerun()
+            st.rerun()  # <--- 已修正為 st.rerun()
     with col2:
         if st.button("下一步：生成完整架構"):
             st.session_state.user_refs = user_refs
             st.session_state.step = 3
-            st.experimental_rerun()
+            st.rerun()  # <--- 已修正為 st.rerun()
 
 # === 步驟三：產出結果 ===
 elif st.session_state.step == 3:
@@ -194,4 +194,4 @@ elif st.session_state.step == 3:
     if st.button("重新開始"):
         st.session_state.step = 1
         st.session_state.final_outline = ""
-        st.experimental_rerun()
+        st.rerun()  # <--- 已修正為 st.rerun()
