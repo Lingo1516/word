@@ -1,222 +1,197 @@
 import streamlit as st
-from openai import OpenAI
-import os
+import random
+import datetime
 
-# --- 1. 頁面基礎設定 ---
-st.set_page_config(page_title="AI 深度論文寫作系統 (終極版)", layout="wide", page_icon="🎓")
+# --- 系統設定 ---
+st.set_page_config(page_title="論文架構產生器 (免API版)", layout="wide", page_icon="📝")
 
-# --- 2. 狀態變數初始化 (Session State) ---
-# 這些變數是用來記憶你的進度，不會因為按按鈕就消失
+# --- 預設資料庫 (模擬 AI 的邏輯) ---
+# 這些是預先寫好的學術句型，程式會根據你的題目自動替換
+GAPS_TEMPLATES = [
+    "過去針對 {topic} 的研究多集中於理論探討，對於「實務應用層面」的數據驗證仍顯不足，此為本研究欲填補之缺口。",
+    "雖然學界對 {topic} 已有廣泛討論，但鮮少有文獻探討其在「特定文化脈絡」下的差異性，這提供了本研究切入的契機。",
+    "現有 {topic} 之文獻多採橫斷面研究，缺乏「縱貫性數據」來解釋其長期演變過程，故本研究擬採用不同的時間跨度進行分析。",
+    "針對 {topic} 的影響因素分析中，過去研究多忽略了「中介變項」的調節效果，導致解釋力有限。"
+]
+
+METHOD_STEPS = {
+    "量化研究 - 問卷調查": [
+        "研究架構圖設計與變數定義",
+        "問卷題項發展 (參考相關文獻)",
+        "預試 (Pre-test) 與信效度分析",
+        "正式施測與樣本回收",
+        "敘述性統計與結構方程模型 (SEM) 分析"
+    ],
+    "質性研究 - 深度訪談": [
+        "擬定半結構式訪談大綱",
+        "受訪者篩選 (滾雪球抽樣法)",
+        "進行訪談並錄音轉錄逐字稿",
+        "編碼 (Coding) 與類別歸納",
+        "三角檢證 (Triangulation) 與主題分析"
+    ],
+    "量化研究 - 實驗法": [
+        "實驗設計 (如：2x2 因子設計)",
+        "受試者隨機分派",
+        "實驗操弄 (Manipulation)",
+        "操控檢核 (Manipulation Check)",
+        "變異數分析 (ANOVA) 與假說檢定"
+    ]
+}
+
+# --- 核心功能函式 ---
+
+def generate_outline(topic, gap, method, refs):
+    """根據輸入條件，組裝出一份標準論文大綱"""
+    current_date = datetime.date.today().strftime("%Y-%m-%d")
+    
+    # 這裡是用邏輯組裝，不是 AI 生成，所以速度極快且不會報錯
+    outline = f"""
+# 論文大綱草案
+**題目：** {topic} 之研究
+**生成日期：** {current_date}
+
+---
+
+## 第一章 緒論 (Introduction)
+### 1.1 研究背景與動機
+* (寫作指引)：請先描述 {topic} 目前在全球或該產業的現況數據。
+* (寫作指引)：引用最近的新聞或報告，指出 {topic} 為何重要。
+* (寫作指引)：帶出目前面臨的問題或挑戰。
+
+### 1.2 研究目的
+* 本研究旨在探討 {topic} 的核心影響因素。
+* 分析不同變數對 {topic} 的作用機制。
+
+### 1.3 研究缺口 (Research Gap)
+> **{gap}**
+
+### 1.4 名詞釋義
+* 針對本研究所涉及的核心變數進行操作型定義。
+
+---
+
+## 第二章 文獻探討 (Literature Review)
+### 2.1 {topic} 的理論基礎
+* (在此處引用您提供的文獻)：
+{refs}
+
+### 2.2 相關實證研究回顧
+* 整理過去五年內關於 {topic} 的國內外研究發現。
+* 歸納出一致的結論與尚未解決的爭議。
+
+---
+
+## 第三章 研究方法 (Methodology)
+**採用方法：** {method}
+
+### 3.1 研究架構
+* 說明研究變數之間的假設關係。
+
+### 3.2 執行步驟
+1. {METHOD_STEPS[method][0]}
+2. {METHOD_STEPS[method][1]}
+3. {METHOD_STEPS[method][2]}
+4. {METHOD_STEPS[method][3]}
+5. {METHOD_STEPS[method][4]}
+
+### 3.3 資料分析工具
+* 說明將使用的統計軟體 (如 SPSS, AMOS, NVivo) 或分析策略。
+
+---
+
+## 第四章 預期結果 (Results)
+* (量化)：呈現人口統計變數分佈表、相關係數表、回歸分析表。
+* (質性)：呈現受訪者基本資料表、主題分析矩陣圖。
+
+## 第五章 結論與建議 (Conclusion)
+* 總結研究發現。
+* 對實務界提出具體管理意涵。
+* 研究限制與未來研究建議。
+    """
+    return outline
+
+# --- UI 介面 ---
+
+st.title("📄 論文架構產生器 (免 OpenAI 版)")
+st.markdown("此工具使用**內建邏輯庫**幫您快速搭建論文骨架，無需任何 API Key，完全免費。")
+
+# 1. 初始化 Session State
 if 'step' not in st.session_state: st.session_state.step = 1
-if 'selected_gap' not in st.session_state: st.session_state.selected_gap = ""
-if 'real_references' not in st.session_state: st.session_state.real_references = ""
-if 'outline' not in st.session_state: st.session_state.outline = ""
-if 'thesis_content' not in st.session_state: st.session_state.thesis_content = {}
-if 'gaps_suggestion' not in st.session_state: st.session_state.gaps_suggestion = ""
+if 'final_outline' not in st.session_state: st.session_state.final_outline = ""
 
-# --- 3. 側邊欄：設定區 ---
+# 2. 側邊欄輸入
 with st.sidebar:
-    st.title("⚙️ 核心設定")
+    st.header("1. 研究設定")
+    user_topic = st.text_input("輸入研究主題", "例如：策略管理對企業績效之影響")
+    user_method = st.selectbox("選擇研究方法", list(METHOD_STEPS.keys()))
     
-    # API Key 輸入
-    api_key = st.text_input("請輸入 OpenAI API Key", type="password", help="請貼上 sk- 開頭的密鑰")
-    
-    # [新增] 模型選擇選單 (解決 404 錯誤的關鍵)
-    st.write("🤖 選擇 AI 模型")
-    selected_model = st.selectbox(
-        "建議使用 gpt-4o-mini (速度快且便宜)",
-        ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4", "gpt-4o"],
-        index=0  # 預設選第一個，確保不會報錯
-    )
-    
-    # 初始化 OpenAI 客戶端
-    client = None
-    if api_key:
-        try:
-            client = OpenAI(api_key=api_key)
-            st.success(f"✅ 已連接 ({selected_model})")
-        except Exception as e:
-            st.error(f"API Key 格式錯誤: {e}")
-    
-    st.divider()
-    st.header("📝 研究主題")
-    topic = st.text_input("研究主題", "例如：生成式AI對大學生學習動機之影響")
-    method = st.selectbox("研究方法", 
-        ["量化研究 - 問卷調查 (Survey)", 
-         "質性研究 - 深度訪談 (Interview)", 
-         "混合研究法 (Mixed Methods)", 
-         "實驗法 (Experiment)"])
-    
-    st.info(f"目前進度：第 {st.session_state.step} / 4 階段")
+    if st.button("重置所有內容"):
+        st.session_state.step = 1
+        st.session_state.final_outline = ""
+        st.experimental_rerun()
 
-# --- 4. 核心 AI 呼叫函式 (新版語法) ---
-def ask_gpt(prompt):
-    """呼叫 GPT 進行思考與寫作"""
-    if not client:
-        return "⚠️ 錯誤：請先在側邊欄輸入有效的 OpenAI API Key。"
-    
-    try:
-        response = client.chat.completions.create(
-            model=selected_model,  # 使用使用者選擇的模型
-            messages=[
-                {"role": "system", "content": "你是一位嚴謹的學術論文指導教授，專精於繁體中文學術寫作。絕不捏造文獻，若無真實來源請標註 [需補充文獻]。寫作風格需學術、客觀、邏輯縝密。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        error_msg = str(e)
-        if "model_not_found" in error_msg or "404" in error_msg:
-            return "❌ **權限錯誤**：您的 API Key 無法使用此模型。\n👉 請在左側側邊欄將模型改為 **'gpt-4o-mini'** 或 **'gpt-3.5-turbo'** 即可解決。"
-        return f"❌ API 呼叫錯誤：{error_msg}"
+# 3. 主畫面流程
 
-# --- 5. 主畫面邏輯 ---
-
-st.title("🎓 AI 深度論文寫作系統 (終極修復版)")
-
-if not api_key:
-    st.warning("👉 請先在左側側邊欄輸入 OpenAI API Key 才能開始。")
-    st.stop()
-
-# === 第一階段：找出缺口 (Gap Analysis) ===
+# === 步驟一：選擇缺口 ===
 if st.session_state.step == 1:
-    st.header("第一階段：研究缺口分析")
-    st.markdown(f"針對主題 **「{topic}」**，AI 將為您尋找學術缺口。")
+    st.subheader("步驟 1：選擇您的研究缺口")
+    st.info(f"系統針對「{user_topic}」為您匹配了以下常見的研究切入點：")
     
-    if st.button("🔍 分析研究缺口"):
-        with st.spinner("AI 正在閱讀文獻邏輯..."):
-            prompt = f"""
-            請針對研究主題「{topic}」，提出 3 個具有學術價值的「研究缺口 (Research Gap)」。
-            要求：
-            1. 缺口必須具體，邏輯合理。
-            2. 每個缺口請附帶一個「暫定題目」。
-            3. 請用條列式呈現。
-            """
-            st.session_state.gaps_suggestion = ask_gpt(prompt)
-            
-    if st.session_state.gaps_suggestion:
-        st.markdown("### 🎯 AI 建議選項：")
-        st.markdown(st.session_state.gaps_suggestion)
-        
-        st.divider()
-        st.subheader("請選擇並確認您的缺口：")
-        user_selected_gap = st.text_area("請將上方您想要的缺口與題目複製貼上到這裡：", height=100)
-        
-        if st.button("✅ 確認缺口，下一步"):
-            if user_selected_gap:
-                st.session_state.selected_gap = user_selected_gap
-                st.session_state.step = 2
-                st.rerun()
-            else:
-                st.error("請先貼上您選擇的研究缺口")
+    # 動態生成缺口選項
+    gap_options = [t.format(topic=user_topic) for t in GAPS_TEMPLATES]
+    
+    selected_gap = st.radio("請選擇一個最適合您的缺口：", gap_options)
+    
+    if st.button("下一步：輸入文獻"):
+        st.session_state.selected_gap = selected_gap
+        st.session_state.step = 2
+        st.experimental_rerun()
 
-# === 第二階段：真實文獻導入 (Real Literature) ===
+# === 步驟二：輸入文獻 ===
 elif st.session_state.step == 2:
-    st.header("第二階段：建立真實文獻庫")
-    st.info("💡 為避免 AI 造假，請您提供 3-5 篇真實的參考文獻摘要，AI 將基於這些內容進行寫作。")
+    st.subheader("步驟 2：建立參考文獻")
+    st.write(f"您選擇的缺口是：**{st.session_state.selected_gap}**")
     
-    st.markdown(f"**您的研究缺口：**\n> {st.session_state.selected_gap}")
+    st.warning("請貼上您找到的真實文獻 (這樣論文才不會造假)")
+    user_refs = st.text_area("請貼上文獻摘要 (一行一筆)：", height=200, 
+                             value="1. Porter, M. E. (1980). Competitive Strategy.\n2. Barney, J. (1991). Firm Resources and Sustained Competitive Advantage.")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔑 幫我生成搜尋關鍵字"):
-            prompt = f"針對題目「{st.session_state.selected_gap}」，請列出 5 組 Google Scholar 搜尋關鍵字（中英文皆要）。"
-            st.write(ask_gpt(prompt))
-            
+        if st.button("上一步"):
+            st.session_state.step = 1
+            st.experimental_rerun()
     with col2:
-        st.markdown("### 📥 貼上文獻摘要")
-        references_input = st.text_area("請貼上真實文獻 (格式：作者, 年份, 標題, 重要發現...)", height=300, 
-                                      placeholder="範例：\n1. 王小明 (2023). 生成式AI教學應用. 發現AI能提升滿意度...\n2. Smith (2024). AI in Education. Found that...")
-        
-        if st.button("✅ 文獻確認，生成大綱"):
-            if references_input:
-                st.session_state.real_references = references_input
-                st.session_state.step = 3
-                st.rerun()
-            else:
-                st.warning("請至少貼入一篇文獻摘要，以確保寫作內容真實。")
+        if st.button("下一步：生成完整架構"):
+            st.session_state.user_refs = user_refs
+            st.session_state.step = 3
+            st.experimental_rerun()
 
-# === 第三階段：架構生成 (Outline) ===
+# === 步驟三：產出結果 ===
 elif st.session_state.step == 3:
-    st.header("第三階段：論文架構藍圖")
+    st.subheader("步驟 3：您的論文架構草稿")
+    st.success("生成完畢！您可以直接複製下方的內容到 Word 開始寫作。")
     
-    if not st.session_state.outline:
-        with st.spinner("正在規劃章節架構..."):
-            prompt = f"""
-            請為以下研究撰寫一份詳細的「學術論文大綱」，目標總字數 15,000 字。
-            題目：{st.session_state.selected_gap}
-            參考文獻：{st.session_state.real_references}
-            方法：{method}
-            要求：包含五章（緒論、文獻探討、方法、結果、結論），列出每節重點。
-            """
-            st.session_state.outline = ask_gpt(prompt)
+    # 呼叫產生器
+    if not st.session_state.final_outline:
+        st.session_state.final_outline = generate_outline(
+            user_topic, 
+            st.session_state.selected_gap, 
+            user_method, 
+            st.session_state.user_refs
+        )
     
-    st.markdown(st.session_state.outline)
+    # 顯示結果
+    st.text_area("Markdown 原始碼 (可複製)", st.session_state.final_outline, height=600)
     
-    if st.button("✅ 架構確認，開始寫作"):
-        st.session_state.step = 4
-        st.rerun()
-
-# === 第四階段：分章寫作 (Writing) ===
-elif st.session_state.step == 4:
-    st.header("第四階段：AI 深度寫作")
-    st.markdown("請依序點擊按鈕，逐章生成內容。")
+    st.download_button(
+        label="📥 下載為 .md 檔案",
+        data=st.session_state.final_outline,
+        file_name="Thesis_Outline.md",
+        mime="text/markdown"
+    )
     
-    tabs = st.tabs(["第一章：緒論", "第二章：文獻探討", "第三章：研究方法", "第四章：研究結果", "第五章：結論"])
-    
-    def write_chapter(chapter_name, focus):
-        return ask_gpt(f"""
-        撰寫論文「{chapter_name}」。
-        題目：{st.session_state.selected_gap}
-        文獻：{st.session_state.real_references}
-        大綱：{st.session_state.outline}
-        要求：至少 2000 字，學術語氣，Markdown 格式，重點：{focus}
-        """)
-
-    # 第一章
-    with tabs[0]:
-        if "ch1" not in st.session_state.thesis_content:
-            if st.button("✍️ 撰寫第一章"):
-                with st.spinner("撰寫中..."):
-                    st.session_state.thesis_content["ch1"] = write_chapter("第一章 緒論", "背景、動機、目的")
-        if "ch1" in st.session_state.thesis_content: st.markdown(st.session_state.thesis_content["ch1"])
-
-    # 第二章
-    with tabs[1]:
-        if "ch2" not in st.session_state.thesis_content:
-            if st.button("✍️ 撰寫第二章"):
-                with st.spinner("撰寫中..."):
-                    st.session_state.thesis_content["ch2"] = write_chapter("第二章 文獻探討", "理論回顧、缺口推導")
-        if "ch2" in st.session_state.thesis_content: st.markdown(st.session_state.thesis_content["ch2"])
-
-    # 第三章
-    with tabs[2]:
-        if "ch3" not in st.session_state.thesis_content:
-            if st.button("✍️ 撰寫第三章"):
-                with st.spinner("撰寫中..."):
-                    st.session_state.thesis_content["ch3"] = write_chapter("第三章 研究方法", f"{method} 執行步驟")
-        if "ch3" in st.session_state.thesis_content: st.markdown(st.session_state.thesis_content["ch3"])
-
-    # 第四章
-    with tabs[3]:
-        st.info("⚠️ 注意：AI 生成的數據為虛擬範例，請替換為真實分析結果。")
-        if "ch4" not in st.session_state.thesis_content:
-            if st.button("✍️ 撰寫第四章 (模擬)"):
-                with st.spinner("撰寫中..."):
-                    st.session_state.thesis_content["ch4"] = write_chapter("第四章 研究結果", "模擬數據呈現與解釋")
-        if "ch4" in st.session_state.thesis_content: st.markdown(st.session_state.thesis_content["ch4"])
-
-    # 第五章
-    with tabs[4]:
-        if "ch5" not in st.session_state.thesis_content:
-            if st.button("✍️ 撰寫第五章"):
-                with st.spinner("撰寫中..."):
-                    st.session_state.thesis_content["ch5"] = write_chapter("第五章 結論", "總結、建議、限制")
-        if "ch5" in st.session_state.thesis_content: st.markdown(st.session_state.thesis_content["ch5"])
-
-    st.divider()
-    # 下載
-    full_text = "\n\n".join(st.session_state.thesis_content.values())
-    if full_text:
-        st.download_button("📥 下載完整論文 (Markdown)", full_text, "Thesis_Draft.md")
+    if st.button("重新開始"):
+        st.session_state.step = 1
+        st.session_state.final_outline = ""
+        st.experimental_rerun()
