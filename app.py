@@ -1,67 +1,36 @@
 import streamlit as st
 import requests
 import json
+import time
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (自動偵測版)", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="論文寫作助手 (多模型切換版)", layout="wide", page_icon="📝")
 
-# --- 核心 1: 自動詢問 Google 到底有哪些模型可用 ---
-def get_valid_model_name(api_key):
-    """詢問 API 目前可用的模型列表，不再瞎猜"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            models = response.json().get('models', [])
-            # 優先尋找 gemini-1.5 系列，其次 gemini-pro
-            for m in models:
-                name = m['name'] # 格式通常是 models/gemini-1.5-flash
-                # 必須支援 generateContent 功能
-                if 'generateContent' in m.get('supportedGenerationMethods', []):
-                    if 'gemini-1.5-flash' in name: return name
-                    if 'gemini-1.5-pro' in name: return name
-            
-            # 如果都沒找到，隨便回傳一個支援文字生成的
-            for m in models:
-                 if 'generateContent' in m.get('supportedGenerationMethods', []):
-                     return m['name']
-            
-            return None
-        else:
-            return None
-    except:
-        return None
-
-# --- 核心 2: 寫作函式 ---
-def ask_gemini_auto(prompt, api_key):
+# --- 核心函式：通用連線 ---
+def ask_gemini_manual(prompt, api_key, model_name):
     if not api_key: return "⚠️ 請先設定 API Key"
     
-    # 步驟 A: 取得正確的模型名稱
-    model_name = get_valid_model_name(api_key)
-    
-    if not model_name:
-        # 如果自動偵測失敗，這通常代表 API Key 本身有問題 (例如沒開通、額度滿了)
-        return "❌ 錯誤：無法偵測到任何可用模型。請確認您的 API Key 是否有效，或是否已在 Google AI Studio 綁定專案。"
-
-    # 顯示一下抓到什麼模型 (除錯用)
-    # st.toast(f"使用模型: {model_name}") 
-
-    # 步驟 B: 使用那個正確的名字去連線
-    # model_name 格式已經是 'models/gemini-xxx'，所以網址不用再加 models/
-    url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
+    # 這裡讓網址跟著你選的模型變動
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
     headers = {'Content-Type': 'application/json'}
     data = { "contents": [{ "parts": [{"text": prompt}] }] }
     
     try:
         response = requests.post(url, headers=headers, json=data)
+        
         if response.status_code == 200:
             try:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             except:
-                return "⚠️ 生成成功但解析失敗。"
+                return "⚠️ 生成成功但內容解析失敗。"
+        elif response.status_code == 429:
+            return "⏳ **速度限制 (429)**：您點太快了，或是此模型目前忙碌中。\n建議：\n1. 等待 20 秒再試。\n2. 在左側切換成 'gemini-1.5-flash' (額度最高)。"
+        elif response.status_code == 404:
+            return f"❌ **模型不存在 (404)**：您的帳號不支援 '{model_name}'。\n👉 請在左側選單切換另一個模型試試看。"
         else:
             return f"❌ 連線失敗 ({response.status_code}): {response.text}"
+            
     except Exception as e:
         return f"❌ 網路錯誤：{str(e)}"
 
@@ -77,24 +46,31 @@ if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
 
 with st.sidebar:
-    st.header("🔍 引擎檢測")
+    st.header("⚙️ 設定區")
+    
+    # 1. 金鑰
     if api_key:
-        st.success("金鑰已載入")
-        # 測試連線
-        valid_model = get_valid_model_name(api_key)
-        if valid_model:
-            st.info(f"✅ 成功連線！\n使用模型：`{valid_model}`")
-        else:
-            st.error("❌ 金鑰似乎無效，找不到可用模型")
+        st.success("✅ 金鑰已載入")
     else:
-        user_key = st.text_input("輸入 Google API Key", type="password")
+        user_key = st.text_input("Google API Key", type="password")
         if user_key:
             api_key = user_key
-            valid_model = get_valid_model_name(api_key)
-            if valid_model:
-                st.success(f"✅ 連線成功！({valid_model})")
-            else:
-                st.error("無法抓取模型，請檢查 Key")
+            st.success("✅ 已輸入")
+    
+    st.divider()
+    
+    # 2. 模型選擇器 (這就是解決問題的關鍵)
+    st.info("👇 如果報錯，請換一個模型")
+    selected_model = st.selectbox(
+        "選擇 AI 模型",
+        [
+            "gemini-1.5-flash", # 推薦：速度快、額度高
+            "gemini-1.5-pro",   # 聰明，但額度較少
+            "gemini-pro",       # 舊版經典，最穩定
+            "gemini-2.0-flash-exp" # 最新實驗版
+        ],
+        index=0 # 預設選第一個 (flash)
+    )
 
     st.divider()
     st.header("📝 研究設定")
@@ -102,7 +78,7 @@ with st.sidebar:
     method = st.selectbox("研究方法", ["問卷調查法", "深度訪談法", "實驗法"])
 
 # --- 主畫面 ---
-st.title("🎓 論文寫作助手 (自動偵測版)")
+st.title("🎓 論文寫作助手 (模型自選版)")
 
 if not api_key:
     st.warning("👈 請先設定 API Key")
@@ -111,25 +87,34 @@ if not api_key:
 # === 步驟一 ===
 if st.session_state.step == 1:
     st.subheader("第一步：文獻與缺口")
+    st.caption(f"目前使用模型：`{selected_model}`")
+    
     if st.button("🔍 開始分析"):
-        with st.spinner("正在詢問 Google..."):
-            res = ask_gemini_auto(f"針對主題「{topic}」列出5筆文獻與1個缺口。", api_key)
+        with st.spinner("AI 思考中..."):
+            res = ask_gemini_manual(f"針對主題「{topic}」列出5筆文獻與1個缺口。", api_key, selected_model)
             st.session_state.refs = res
             st.rerun()
+            
     if st.session_state.refs:
         st.markdown(st.session_state.refs)
-        if st.button("下一步"):
-            st.session_state.step = 2
-            st.rerun()
+        if "429" in st.session_state.refs or "404" in st.session_state.refs:
+            st.error("⚠️ 發生錯誤，請嘗試切換左側的模型。")
+        else:
+            if st.button("下一步"):
+                st.session_state.step = 2
+                st.rerun()
 
 # === 步驟二 ===
 elif st.session_state.step == 2:
     st.subheader("第二步：大綱")
+    st.caption(f"目前使用模型：`{selected_model}`")
+    
     if not st.session_state.outline:
         with st.spinner("生成大綱..."):
-            res = ask_gemini_auto(f"題目：{topic}。方法：{method}。文獻：{st.session_state.refs}。寫出大綱。", api_key)
+            res = ask_gemini_manual(f"題目：{topic}。方法：{method}。文獻：{st.session_state.refs}。寫出大綱。", api_key, selected_model)
             st.session_state.outline = res
             st.rerun()
+            
     st.markdown(st.session_state.outline)
     if st.button("下一步"):
         st.session_state.step = 3
@@ -138,15 +123,21 @@ elif st.session_state.step == 2:
 # === 步驟三 ===
 elif st.session_state.step == 3:
     st.subheader("第三步：寫作")
+    st.caption(f"目前使用模型：`{selected_model}`")
+    
     tabs = st.tabs(["第一章", "第二章", "第三章", "第四章", "第五章"])
     def write(ch):
-        return ask_gemini_auto(f"撰寫「{ch}」。題目：{topic}。大綱：{st.session_state.outline}。文獻：{st.session_state.refs}。", api_key)
+        return ask_gemini_manual(f"撰寫「{ch}」。題目：{topic}。大綱：{st.session_state.outline}。文獻：{st.session_state.refs}。", api_key, selected_model)
 
     with tabs[0]:
         if st.button("寫第一章"): st.session_state.content['ch1'] = write("第一章")
         if 'ch1' in st.session_state.content: st.markdown(st.session_state.content['ch1'])
     
-    # 其他章節省略顯示以節省版面，功能相同
     with tabs[1]:
         if st.button("寫第二章"): st.session_state.content['ch2'] = write("第二章")
         if 'ch2' in st.session_state.content: st.markdown(st.session_state.content['ch2'])
+        
+    # (為節省篇幅，其他章節邏輯相同)
+    with tabs[2]:
+        if st.button("寫第三章"): st.session_state.content['ch3'] = write("第三章")
+        if 'ch3' in st.session_state.content: st.markdown(st.session_state.content['ch3'])
