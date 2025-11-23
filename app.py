@@ -1,185 +1,231 @@
 import streamlit as st
-import random
-import datetime
+import openai
+from datetime import datetime
 
-# --- 1. 系統設定與資料庫 (模擬 AI 邏輯) ---
+# --- 頁面設定 ---
+st.set_page_config(page_title="AI 深度論文寫作系統", layout="wide", page_icon="🎓")
 
-st.set_page_config(page_title="AI 論文架構生成顧問", layout="wide", page_icon="🎓")
+# --- Session State 初始化 (記憶體) ---
+if 'step' not in st.session_state: st.session_state.step = 1
+if 'selected_gap' not in st.session_state: st.session_state.selected_gap = ""
+if 'real_references' not in st.session_state: st.session_state.real_references = ""
+if 'outline' not in st.session_state: st.session_state.outline = ""
+if 'thesis_content' not in st.session_state: st.session_state.thesis_content = {}
 
-# 研究方法資料庫：定義不同方法的標準架構
-METHODOLOGIES = {
-    "量化研究 - 問卷調查法 (Survey)": {
-        "desc": "適合探討變數之間的關聯性、影響因素或滿意度調查。",
-        "steps": ["研究架構圖設計", "問卷設計與預試", "信效度分析", "描述性統計", "相關與迴歸分析"]
-    },
-    "量化研究 - 實驗法 (Experiment)": {
-        "desc": "適合驗證因果關係，比較實驗組與對照組的差異。",
-        "steps": ["實驗設計 (2x2 Factorial Design)", "受試者招募與分組", "前測 (Pre-test)", "實驗介入 (Intervention)", "後測與共變數分析 (ANCOVA)"]
-    },
-    "質性研究 - 深度訪談法 (In-depth Interview)": {
-        "desc": "適合探索未知現象、了解受訪者深層動機與經驗。",
-        "steps": ["訪談大綱擬定", "受訪者滾雪球抽樣", "半結構式訪談執行", "逐字稿轉錄", "編碼與主題分析 (Thematic Analysis)"]
-    },
-    "質性研究 - 個案研究法 (Case Study)": {
-        "desc": "針對特定組織、事件或人物進行深入的全貌分析。",
-        "steps": ["個案篩選與背景描述", "多重資料蒐集 (文件、觀察、訪談)", "個案內分析", "跨個案比較 (若為多個案)", "三角檢證 (Triangulation)"]
-    },
-    "文獻回顧 - 系統性文獻回顧 (Systematic Review)": {
-        "desc": "針對特定議題進行窮盡式的文獻蒐集與評析。",
-        "steps": ["PRISMA 流程圖繪製", "資料庫檢索策略設定", "納入與排除標準", "文獻品質評估", "綜合討論"]
-    }
-}
-
-# 模擬生成邏輯 (在沒有 LLM API 的情況下，用模板組合出高品質草稿)
-def generate_titles(keyword, method_name):
-    """根據關鍵字與方法生成題目"""
-    templates = [
-        f"探討{keyword}對使用者行為之影響：以{method_name.split('-')[0]}為途徑",
-        f"{keyword}在後疫情時代的應用與挑戰：{method_name.split('-')[1]}之實證研究",
-        f"從{keyword}觀點看產業轉型策略：一項探索性研究",
-        f"影響{keyword}成效之關鍵因素分析",
-        f"整合性觀點下的{keyword}發展模式建構"
-    ]
-    return random.sample(templates, 3)
-
-def generate_gap(keyword):
-    """生成通用的研究缺口敘述"""
-    return [
-        f"過去關於「{keyword}」的研究多集中於歐美國家，缺乏在本土情境下的實證數據，文化差異可能導致結果有所不同。",
-        f"現有文獻多探討{keyword}的技術層面，鮮少從「使用者心理」或「組織採用意願」的角度進行深入分析。",
-        f"雖然已有研究證實{keyword}的重要性，但對於其「中介機制」與「邊界條件」的探討仍顯不足。",
-        f"過往研究多採橫斷面調查，缺乏縱貫性的數據來驗證{keyword}隨時間變化的動態影響。"
-    ]
-
-def generate_literature(keyword, start_year, end_year):
-    """生成模擬的文獻列表 (混合中英文)"""
-    # 這裡是用演算法模擬生成，實際應用可串接 Google Scholar API
-    years = range(start_year, end_year + 1)
-    
-    literatures = [
-        {"author": "Smith, J. & Brown, L.", "year": random.choice(years), "title": f"The Impact of {keyword} on Modern Society", "source": "Journal of Future Studies", "lang": "EN"},
-        {"author": "張志銘、李曉華", "year": random.choice(years), "title": f"{keyword}應用於產業創新之個案研究", "source": "管理評論", "lang": "TW"},
-        {"author": "Johnson, A. et al.", "year": random.choice(years), "title": f"A Systematic Review of {keyword}", "source": "Int. J. of Information Mgmt.", "lang": "EN"},
-        {"author": "王大明", "year": random.choice(years), "title": f"探討{keyword}與消費者滿意度之關聯", "source": "行銷科學學報", "lang": "TW"},
-        {"author": "Chen, H. Y.", "year": random.choice(years), "title": f"Strategies for implementing {keyword} in SMEs", "source": "Business Horizons", "lang": "EN"},
-    ]
-    return sorted(literatures, key=lambda x: x['year'], reverse=True)
-
-# --- 2. 介面設計 ---
-
-# 側邊欄：輸入區
+# --- 側邊欄：設定與輸入 ---
 with st.sidebar:
-    st.header("⚙️ 論文參數設定")
+    st.title("⚙️ 核心設定")
+    api_key = st.text_input("請輸入 OpenAI API Key", type="password", help="需要 GPT-4 才能寫出長篇且有邏輯的論文")
     
-    user_keyword = st.text_input("1. 輸入核心關鍵字", "生成式AI", help="例如：ESG、遠距教學、顧客忠誠度")
+    if api_key:
+        openai.api_key = api_key
+        st.success("API Key 已連接")
     
-    current_year = datetime.datetime.now().year
-    year_range = st.slider("2. 文獻回顧年份範圍", 2010, current_year, (current_year-5, current_year))
+    st.divider()
+    st.header("1. 研究主題設定")
+    topic = st.text_input("研究主題 (Topic)", "例如：生成式AI對大學生學習動機之影響")
+    method = st.selectbox("研究方法 (Methodology)", 
+        ["量化研究 - 問卷調查 (Survey)", 
+         "質性研究 - 深度訪談 (Interview)", 
+         "混合研究法 (Mixed Methods)", 
+         "實驗法 (Experiment)"])
     
-    st.write("3. 選擇研究方法")
-    selected_method = st.radio(
-        "請選擇你想採用的方法：",
-        options=list(METHODOLOGIES.keys())
-    )
-    
-    st.info(f"💡 方法說明：\n{METHODOLOGIES[selected_method]['desc']}")
-    
-    generate_btn = st.button("🚀 生成論文架構", type="primary")
+    st.info(f"目標：撰寫 15,000 字小論文\n目前進度：第 {st.session_state.step} 階段")
 
-# 主畫面：結果區
-st.title("🎓 自動化論文架構顧問")
-st.markdown(f"目標：針對 **「{user_keyword}」** 提供學術建議與架構規劃")
+# --- 核心 AI 函式 ---
+def ask_gpt(prompt, model="gpt-4"):
+    """呼叫 GPT 進行思考與寫作"""
+    try:
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是一位嚴謹的學術論文指導教授，專精於繁體中文學術寫作。絕不捏造文獻，若無真實來源請標註 [需補充文獻]。寫作風格需學術、客觀、邏輯縝密。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        return response.choices[0].message['content']
+    except Exception as e:
+        return f"錯誤：{str(e)} (請檢查 API Key 或額度)"
 
-if generate_btn and user_keyword:
-    with st.spinner('正在分析文獻趨勢、建構邏輯架構中...'):
-        import time
-        time.sleep(1) # 模擬運算時間
+# --- 主畫面邏輯 ---
+
+st.title("🎓 AI 深度論文寫作系統")
+
+if not api_key:
+    st.warning("⚠️ 請先在左側輸入 OpenAI API Key 才能啟動 AI 引擎。")
+    st.stop()
+
+# === 第一階段：找出缺口 (Gap Analysis) ===
+if st.session_state.step == 1:
+    st.header("第一階段：研究缺口分析與選擇")
+    st.markdown(f"針對主題 **「{topic}」**，AI 將為您分析目前學術界的潛在缺口。")
+    
+    if st.button("🔍 分析研究缺口"):
+        with st.spinner("正在檢索學術邏輯與推導缺口..."):
+            prompt = f"""
+            請針對研究主題「{topic}」，提出 3 個具有學術價值的「研究缺口 (Research Gap)」。
+            
+            要求：
+            1. 缺口必須具體，邏輯合理。
+            2. 每個缺口請附帶一個「暫定題目」。
+            3. 請用 JSON 格式以外的條列式清晰呈現，方便使用者閱讀。
+            4. 不要捏造文獻，而是基於該領域普遍的不足之處（如：缺乏本土實證、變數中介效果不明、方法論限制等）進行推論。
+            """
+            gaps_result = ask_gpt(prompt)
+            st.session_state.gaps_suggestion = gaps_result
+            
+    if 'gaps_suggestion' in st.session_state:
+        st.markdown("### 🎯 AI 建議的缺口選項：")
+        st.markdown(st.session_state.gaps_suggestion)
         
-        # 取得資料
-        titles = generate_titles(user_keyword, selected_method)
-        gaps = generate_gap(user_keyword)
-        refs = generate_literature(user_keyword, year_range[0], year_range[1])
-        method_steps = METHODOLOGIES[selected_method]['steps']
-
-        # --- 區塊 1: 題目建議 ---
-        st.subheader("1. 📌 建議論文題目")
-        st.markdown("以下依據學術慣例為您生成三個可選題目：")
+        st.divider()
+        st.subheader("請選擇並修飾您要的缺口：")
+        user_selected_gap = st.text_area("複製上方您喜歡的缺口與題目，貼在這裡：", height=100)
         
-        col1, col2, col3 = st.columns(3)
-        for i, title in enumerate(titles):
-            with [col1, col2, col3][i]:
-                st.success(f"**方案 {i+1}**\n\n{title}")
+        if st.button("✅ 確認缺口，進入文獻階段"):
+            if user_selected_gap:
+                st.session_state.selected_gap = user_selected_gap
+                st.session_state.step = 2
+                st.experimental_rerun()
+            else:
+                st.error("請先輸入您選擇的研究缺口")
 
-        st.markdown("---")
-
-        # --- 區塊 2: 研究缺口 (Gap) ---
-        st.subheader("2. 🔍 潛在研究缺口 (Research Gap)")
-        st.markdown(f"針對 **{user_keyword}** 領域，我們發現目前的文獻可能有以下不足，這就是您的切入點：")
+# === 第二階段：真實文獻導入 (Real Literature) ===
+elif st.session_state.step == 2:
+    st.header("第二階段：建立真實文獻庫")
+    st.info("💡 AI 無法上網搜尋最新付費論文，為避免造假，請依據 AI 建議的關鍵字，去 Google Scholar 找 3-5 篇真的文獻貼回來。這將作為論文的核心依據。")
+    
+    st.markdown(f"**您的研究缺口：** {st.session_state.selected_gap}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔑 告訴我該搜尋什麼關鍵字？"):
+            prompt = f"針對題目與缺口「{st.session_state.selected_gap}」，請列出 5 組精準的 Google Scholar 搜尋關鍵字（中英文皆要），以便使用者找到核心文獻。"
+            st.write(ask_gpt(prompt))
+            
+    with col2:
+        st.markdown("### 📥 在此貼上真實文獻摘要")
+        references_input = st.text_area("格式：作者 (年份) 標題。重要發現...", height=300, placeholder="例如：\n1. 張某某 (2023) 生成式AI與學習成效。發現AI能顯著提升... \n2. Smith (2024) AI Ethics. Found that...")
         
-        for gap in gaps:
-            st.markdown(f"- 🛑 **缺口發現：** {gap}")
+        if st.button("✅ 文獻確認，生成大綱"):
+            if references_input:
+                st.session_state.real_references = references_input
+                st.session_state.step = 3
+                st.experimental_rerun()
+            else:
+                st.warning("為了論文品質，請至少貼入一篇真實文獻或摘要。")
 
-        st.markdown("---")
+# === 第三階段：架構生成 (Outline) ===
+elif st.session_state.step == 3:
+    st.header("第三階段：論文架構藍圖")
+    
+    if not st.session_state.outline:
+        with st.spinner("正在根據缺口與真實文獻，規劃 15,000 字的章節架構..."):
+            prompt = f"""
+            請為以下研究撰寫一份詳細的「學術論文大綱」，目標總字數 15,000 字。
+            
+            題目與缺口：{st.session_state.selected_gap}
+            核心參考文獻：{st.session_state.real_references}
+            研究方法：{method}
+            
+            要求：
+            1. 結構必須包含五章（緒論、文獻探討、研究方法、分析結果、結論）。
+            2. 每一節（如 2.1, 2.2）都要列出預計撰寫的重點與字數分配。
+            3. 第三章研究方法需詳細列出步驟（符合 {method} 的專業流程）。
+            """
+            st.session_state.outline = ask_gpt(prompt)
+    
+    st.markdown(st.session_state.outline)
+    
+    if st.button("✅ 架構確認，開始分章撰寫"):
+        st.session_state.step = 4
+        st.experimental_rerun()
 
-        # --- 區塊 3: 推薦文獻 (Literature) ---
-        st.subheader("3. 📚 關鍵文獻參考 (Reference)")
-        st.markdown(f"篩選年份：{year_range[0]} - {year_range[1]}")
+# === 第四階段：分章寫作 (Writing Agent) ===
+elif st.session_state.step == 4:
+    st.header("第四階段：AI 深度寫作模式")
+    st.markdown("由於 15,000 字過長，我們將**逐章撰寫**。請依序點擊下方按鈕。")
+    
+    tabs = st.tabs(["第一章：緒論", "第二章：文獻探討", "第三章：研究方法", "第四章：研究結果", "第五章：結論"])
+    
+    # 定義寫作函式
+    def write_chapter(chapter_name, focus_points):
+        prompt = f"""
+        請撰寫論文的「{chapter_name}」。
         
-        ref_text = ""
-        for ref in refs:
-            icon = "🇺🇸" if ref['lang'] == "EN" else "🇹🇼"
-            citation = f"{ref['author']} ({ref['year']}). {ref['title']}. *{ref['source']}*."
-            st.markdown(f"{icon} {citation}")
-            ref_text += f"{citation}\n"
-
-        st.markdown("---")
-
-        # --- 區塊 4: 客製化論文大綱 ---
-        st.subheader(f"4. 📝 論文大綱建議：{selected_method.split('-')[0]}")
-        st.info(f"已根據您選擇的 **{selected_method.split('-')[1]}** 調整第三章架構")
-
-        # 動態生成大綱
-        outline = f"""
-# 論文題目：{titles[0]} (暫定)
-
-## 第一章 緒論 (Introduction)
-1.1 研究背景與動機 (為什麼現在要研究 {user_keyword}？)
-1.2 研究目的 (本研究試圖解決什麼問題？)
-1.3 研究問題 (Research Questions)
-1.4 名詞釋義
-1.5 研究範圍與限制
-
-## 第二章 文獻探討 (Literature Review)
-2.1 {user_keyword} 的定義與理論基礎
-2.2 國內外相關實證研究回顧
-2.3 研究缺口推導 (Research Gap)
-2.4 研究架構推導 (Conceptual Framework)
-
-## 第三章 研究方法 (Methodology)
-3.1 研究設計 ({selected_method.split('-')[1]})
-3.2 研究對象與抽樣 ({method_steps[1]})
-3.3 研究工具/資料蒐集程序 ({method_steps[2]})
-3.4 資料分析方法 ({method_steps[4]})
-
-## 第四章 研究結果 (Results)
-4.1 樣本結構/資料描述
-4.2 主要發現 (對應研究問題)
-4.3 假設檢定結果/主題分析結果
-
-## 第五章 結論與建議 (Conclusion)
-5.1 研究結論摘要
-5.2 理論與實務意涵
-5.3 研究限制與未來建議
-
-## 參考文獻
-{ref_text}
+        基礎資訊：
+        - 題目與缺口：{st.session_state.selected_gap}
+        - 參考文獻庫：{st.session_state.real_references}
+        - 完整大綱：{st.session_state.outline}
+        
+        寫作要求：
+        1. 字數目標：至少 2,500 字（請盡量詳細，多加闡述）。
+        2. 語氣：專業學術中文。
+        3. 引用：請在適當處標註 (Author, Year)，優先使用上述提供的參考文獻庫。
+        4. 格式：使用 Markdown 格式，包含次標題。
+        5. 內容重點：{focus_points}
         """
+        return ask_gpt(prompt, model="gpt-4") # 建議使用 GPT-4
+
+    # --- 第一章 ---
+    with tabs[0]:
+        st.subheader("第一章：緒論")
+        if "ch1" not in st.session_state.thesis_content:
+            if st.button("✍️ 撰寫第一章"):
+                with st.spinner("正在撰寫緒論，這需要幾分鐘..."):
+                    st.session_state.thesis_content["ch1"] = write_chapter("第一章 緒論", "包含研究背景、動機、目的、問題、名詞解釋")
         
-        st.text_area("您可以直接複製以下大綱：", outline, height=400)
-        st.download_button("📥 下載完整大綱 (Markdown)", outline, "paper_structure.md")
+        if "ch1" in st.session_state.thesis_content:
+            st.markdown(st.session_state.thesis_content["ch1"])
 
-elif generate_btn and not user_keyword:
-    st.warning("⚠️ 請務必輸入「關鍵字」才能開始分析！")
+    # --- 第二章 ---
+    with tabs[1]:
+        st.subheader("第二章：文獻探討")
+        if "ch2" not in st.session_state.thesis_content:
+            if st.button("✍️ 撰寫第二章"):
+                with st.spinner("正在整合文獻與理論..."):
+                    st.session_state.thesis_content["ch2"] = write_chapter("第二章 文獻探討", "包含理論基礎、相關研究回顧、研究缺口推導、假設推導(若為量化)")
+        
+        if "ch2" in st.session_state.thesis_content:
+            st.markdown(st.session_state.thesis_content["ch2"])
 
-else:
-    st.info("👈 請從左側輸入您的研究主題，開始規劃論文。")
+    # --- 第三章 ---
+    with tabs[2]:
+        st.subheader("第三章：研究方法")
+        if "ch3" not in st.session_state.thesis_content:
+            if st.button("✍️ 撰寫第三章"):
+                with st.spinner("正在描述研究設計..."):
+                    st.session_state.thesis_content["ch3"] = write_chapter("第三章 研究方法", f"詳細描述 {method} 之執行步驟、對象、工具、分析方法")
+        
+        if "ch3" in st.session_state.thesis_content:
+            st.markdown(st.session_state.thesis_content["ch3"])
+
+    # --- 第四章 (模擬結果) ---
+    with tabs[3]:
+        st.subheader("第四章：研究結果")
+        st.warning("注意：AI 只能生成「虛擬數據」或「預期結果範本」。真實論文需填入實際跑出的數據。")
+        if "ch4" not in st.session_state.thesis_content:
+            if st.button("✍️ 撰寫第四章 (模擬框架)"):
+                with st.spinner("正在生成結果呈現框架..."):
+                    st.session_state.thesis_content["ch4"] = write_chapter("第四章 研究結果", "生成虛擬的數據分析結果表格、圖表說明、假設檢定結果描述")
+        
+        if "ch4" in st.session_state.thesis_content:
+            st.markdown(st.session_state.thesis_content["ch4"])
+
+    # --- 第五章 ---
+    with tabs[4]:
+        st.subheader("第五章：結論與建議")
+        if "ch5" not in st.session_state.thesis_content:
+            if st.button("✍️ 撰寫第五章"):
+                with st.spinner("正在進行總結與建議..."):
+                    st.session_state.thesis_content["ch5"] = write_chapter("第五章 結論與建議", "研究發現摘要、管理/教育實務意涵、學術貢獻、研究限制")
+        
+        if "ch5" in st.session_state.thesis_content:
+            st.markdown(st.session_state.thesis_content["ch5"])
+
+    st.divider()
+    # 下載全部
+    full_text = "\n\n".join(st.session_state.thesis_content.values())
+    if full_text:
+        st.download_button("📥 下載完整 15,000 字論文初稿 (Markdown)", full_text, "Full_Thesis.md")
