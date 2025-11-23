@@ -4,9 +4,9 @@ import json
 import re
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (終極合體版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="論文寫作助手 (多選勾選版)", layout="wide", page_icon="☑️")
 
-# --- 核心 1: 掃描模型 (加回來了！) ---
+# --- 核心 1: 掃描模型 ---
 def get_available_models(api_key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
@@ -45,11 +45,11 @@ if 'step' not in st.session_state: st.session_state.step = 0
 if 'proposed_titles' not in st.session_state: st.session_state.proposed_titles = []
 if 'final_title' not in st.session_state: st.session_state.final_title = ""
 if 'refs' not in st.session_state: st.session_state.refs = "" 
-if 'framework' not in st.session_state: st.session_state.framework = "" # 架構
+if 'framework' not in st.session_state: st.session_state.framework = ""
 if 'outline' not in st.session_state: st.session_state.outline = ""
 if 'content' not in st.session_state: st.session_state.content = {}
 if 'apa_refs' not in st.session_state: st.session_state.apa_refs = ""
-if 'my_models' not in st.session_state: st.session_state.my_models = [] # 儲存掃描結果
+if 'my_models' not in st.session_state: st.session_state.my_models = []
 
 # --- 側邊欄 ---
 api_key = None
@@ -63,35 +63,27 @@ with st.sidebar:
     
     if api_key:
         st.success("✅ 金鑰已載入")
-        
-        # --- 【這裡！搜尋按鈕回來了】 ---
         if st.button("🔄 搜尋可用模型"):
             with st.spinner("掃描中..."):
                 found = get_available_models(api_key)
                 if found: 
                     st.session_state.my_models = found
-                    st.success(f"找到 {len(found)} 個模型")
+                    st.success(f"找到 {len(found)} 個")
                 else:
-                    st.error("掃描失敗，請檢查 Key")
+                    st.error("掃描失敗")
 
-    # 模型選擇邏輯
-    model_options = ["gemini-1.5-flash", "gemini-1.5-pro"] # 預設
-    if st.session_state.my_models:
-        model_options = st.session_state.my_models # 有掃描到就用掃描的
-
-    st.markdown("### 選擇模型")
+    model_options = ["gemini-1.5-flash", "gemini-1.5-pro"]
+    if st.session_state.my_models: model_options = st.session_state.my_models
     
-    # 自動選預設值
     default_index = 0
     for i, m in enumerate(model_options):
         if 'flash' in m: default_index = i
-        
-    selected_model = st.selectbox("請選擇", model_options, index=default_index)
+    selected_model = st.selectbox("選擇模型", model_options, index=default_index)
     
     st.divider()
     st.header("📝 2. 研究設定")
     
-    # 關鍵字 (5格)
+    # 關鍵字
     k1 = st.text_input("關鍵字 1", value="")
     k2 = st.text_input("關鍵字 2", value="")
     k3 = st.text_input("關鍵字 3", value="")
@@ -101,26 +93,46 @@ with st.sidebar:
 
     st.divider()
     
-    # 方法選擇
+    # 方法選擇 (新增：多選勾選)
     method_category = st.selectbox("研究途徑", ["多準則決策 (MCDM)", "量化研究", "質性研究", "實驗法"])
     final_method = method_category
     
-    # 預設變數
     num_dims = 3
     num_crits = 4
 
     if method_category == "多準則決策 (MCDM)":
-        mcdm_tool = st.selectbox("MCDM 方法", 
-            ["Delphi (德爾菲法)", "AHP (層級分析法)", "ANP", "DEMATEL", "TOPSIS", "VIKOR", "Fuzzy AHP", "DANP", "Fuzzy Delphi"]
+        # 【修改處】改用 multiselect 讓用戶可以勾選多個
+        st.markdown("#### ☑️ 請勾選欲使用的方法 (可複選)")
+        mcdm_tools = st.multiselect(
+            "點擊下方選擇：", 
+            [
+                "Delphi (德爾菲法)", 
+                "Fuzzy Delphi (模糊德爾菲)",
+                "AHP (層級分析法)", 
+                "Fuzzy AHP (模糊層級分析)",
+                "ANP (網路分析法)", 
+                "DEMATEL (決策實驗室法)", 
+                "DANP (DEMATEL+ANP)",
+                "FCM (模糊認知圖)", 
+                "TOPSIS", 
+                "VIKOR"
+            ],
+            default=["Delphi (德爾菲法)", "AHP (層級分析法)"] # 預設範例
         )
-        final_method = f"多準則決策 - {mcdm_tool}"
         
-        st.markdown("#### 🏗️ 設定架構數量")
-        num_dims = st.number_input("欲建立的「構面」數量", min_value=2, max_value=10, value=3)
-        num_crits = st.number_input("每個構面下的「準則」數量 (約)", min_value=2, max_value=10, value=3)
+        if mcdm_tools:
+            final_method = f"多準則決策混合模式 ({' + '.join(mcdm_tools)})"
+        else:
+            st.warning("請至少勾選一個方法")
+            final_method = "多準則決策 (未指定方法)"
+        
+        st.divider()
+        st.markdown("#### 🏗️ 設定指標數量")
+        num_dims = st.number_input("構面數量", 2, 10, 3)
+        num_crits = st.number_input("準則數量(每構面)", 2, 10, 4)
 
 # --- 主畫面 ---
-st.title("💎 論文寫作助手 (全功能終極版)")
+st.title("☑️ 論文寫作助手 (多選勾選版)")
 
 if not api_key: st.warning("請先輸入 API Key"); st.stop()
 
@@ -131,7 +143,7 @@ if st.session_state.step == 0:
         if not keywords_str: st.error("請輸入關鍵字")
         else:
             with st.spinner("構思中..."):
-                prompt = f"關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文學術題目，不要解釋。"
+                prompt = f"關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文學術題目。"
                 res = ask_gemini(prompt, api_key, selected_model)
                 titles = [t.strip() for t in res.split('\n') if t.strip() and not t.startswith("Here")]
                 clean_titles = []
@@ -152,12 +164,10 @@ if st.session_state.step == 0:
 elif st.session_state.step == 1:
     st.subheader("步驟 1：導入真實文獻")
     st.info("請貼上華藝或 Google 學術的真實文獻資料 (作者/年份/題目/摘要)。")
-    
     raw_refs = st.text_area("📋 文獻資料貼上區：", height=300)
     
-    if st.button("✅ 確認文獻，下一步 (建構架構)"):
-        if not raw_refs:
-            st.error("請貼上文獻")
+    if st.button("✅ 確認文獻，下一步"):
+        if not raw_refs: st.error("請貼上文獻")
         else:
             st.session_state.refs = raw_refs
             st.session_state.step = 1.5 
@@ -166,28 +176,23 @@ elif st.session_state.step == 1:
 # === 步驟 1.5: 建構評估架構 ===
 elif st.session_state.step == 1.5:
     st.subheader("步驟 1.5：建構評估指標體系")
-    st.info(f"設定：{num_dims} 個構面，每個約 {num_crits} 個準則。")
+    st.info(f"目前設定：{num_dims} 個構面，每個約 {num_crits} 個準則。")
+    st.info(f"採用方法：{final_method}")
     
     if not st.session_state.framework:
-        if st.button("⚡ 依照文獻與題目，產生構面與準則"):
-            with st.spinner("分析文獻萃取指標中..."):
+        if st.button("⚡ 依照文獻產生架構"):
+            with st.spinner("分析中..."):
                 prompt = f"""
                 題目：{st.session_state.final_title}
-                參考文獻：{st.session_state.refs}
-                
-                請建立評估指標體系：
-                1. 共 {num_dims} 個主要構面。
-                2. 每個構面下約 {num_crits} 個準則。
-                
+                文獻：{st.session_state.refs}
+                任務：建立評估指標體系 ({num_dims}構面 x {num_crits}準則)。
                 請輸出 Markdown 列表。
                 """
                 st.session_state.framework = ask_gemini(prompt, api_key, selected_model)
                 st.rerun()
     
     if st.session_state.framework:
-        st.write("▼ AI 建議架構 (可修改)：")
-        edited_framework = st.text_area("編輯區", value=st.session_state.framework, height=400)
-        
+        edited_framework = st.text_area("編輯架構 (可修改名稱)：", value=st.session_state.framework, height=400)
         if st.button("🔒 鎖定架構，生成大綱"):
             st.session_state.framework = edited_framework
             st.session_state.step = 2
@@ -201,11 +206,8 @@ elif st.session_state.step == 2:
             prompt = f"""
             題目：{st.session_state.final_title}
             方法：{final_method}
-            評估架構：{st.session_state.framework}
-            
-            請寫出五章大綱。
-            第三章需包含上述架構建立過程。
-            第四章需針對構面與準則分析。
+            架構：{st.session_state.framework}
+            請寫出五章大綱，第三章需詳述 {final_method} 步驟。
             """
             st.session_state.outline = ask_gemini(prompt, api_key, selected_model)
             st.rerun()
@@ -219,19 +221,10 @@ elif st.session_state.step == 2:
 # === 步驟 3: 撰寫 ===
 elif st.session_state.step == 3:
     st.subheader("步驟 3：分章撰寫")
-    
     tabs = st.tabs(["第一章", "第二章", "第三章", "第四章", "第五章"])
     
     def write_ch(ch, extra=""):
-        return ask_gemini(f"""
-        撰寫「{ch}」。
-        題目：{st.session_state.final_title}。
-        方法：{final_method}。
-        架構：{st.session_state.framework}。
-        文獻：{st.session_state.refs}。
-        {extra}
-        要求：繁體中文，學術語氣，引用真實文獻。
-        """, api_key, selected_model)
+        return ask_gemini(f"撰寫「{ch}」。題目：{st.session_state.final_title}。方法：{final_method}。架構：{st.session_state.framework}。文獻：{st.session_state.refs}。{extra} 要求：繁體中文，學術語氣，引用真實文獻。", api_key, selected_model)
 
     with tabs[0]:
         if st.button("✍️ 寫第一章"):
@@ -248,19 +241,14 @@ elif st.session_state.step == 3:
     with tabs[2]:
         if st.button("✍️ 寫第三章"):
             with st.spinner("寫作中..."):
-                st.session_state.content['ch3'] = write_ch("第三章 研究方法", f"詳細說明 {final_method} 步驟，列出指標體系。")
+                st.session_state.content['ch3'] = write_ch("第三章 研究方法", f"詳細說明 {final_method} 的執行步驟與數學原理。")
         if 'ch3' in st.session_state.content: st.markdown(st.session_state.content['ch3'])
 
     with tabs[3]:
-        st.info("💡 模擬數據增強版")
+        st.info(f"將針對 {final_method} 進行模擬分析。")
         if st.button("✍️ 寫第四章"):
             with st.spinner("模擬數據中..."):
-                extra_prompt = f"""
-                針對架構：{st.session_state.framework}
-                模擬 {final_method} 分析結果 (如權重、排序)。
-                數據要顯著且合理，使用 Markdown 表格。
-                """
-                st.session_state.content['ch4'] = write_ch("第四章 資料分析與結果", extra_prompt)
+                st.session_state.content['ch4'] = write_ch("第四章 資料分析與結果", "模擬數據要豐富且顯著，使用 Markdown 表格呈現分析結果。")
         if 'ch4' in st.session_state.content: st.markdown(st.session_state.content['ch4'])
 
     with tabs[4]:
@@ -278,24 +266,15 @@ elif st.session_state.step == 3:
 # === 步驟 4: 意見修正 & APA ===
 elif st.session_state.step == 4:
     st.subheader("步驟 4：總體建議與 APA")
-    
-    user_feedback = st.text_area("📝 請輸入修改建議 (AI 將重寫第五章)：", height=150)
+    user_feedback = st.text_area("📝 請輸入您的修改建議：", height=150)
     
     if st.button("🚀 修整 & 生成 APA"):
-        if not user_feedback:
-            st.error("請輸入意見")
+        if not user_feedback: st.error("請輸入意見")
         else:
             with st.spinner("處理中..."):
-                refine_prompt = f"""
-                重寫第五章。題目：{st.session_state.final_title}
-                原初稿：{st.session_state.content.get('ch5', '')}
-                **用戶意見**：{user_feedback}
-                """
-                new_ch5 = ask_gemini(refine_prompt, api_key, selected_model)
+                new_ch5 = ask_gemini(f"重寫第五章。題目：{st.session_state.final_title}。原稿：{st.session_state.content.get('ch5','')}。意見：{user_feedback}", api_key, selected_model)
                 st.session_state.content['ch5'] = new_ch5
-                
-                apa_prompt = f"整理成 APA 7th 格式：\n{st.session_state.refs}"
-                st.session_state.apa_refs = ask_gemini(apa_prompt, api_key, selected_model)
+                st.session_state.apa_refs = ask_gemini(f"整理成 APA 7th：\n{st.session_state.refs}", api_key, selected_model)
                 st.rerun()
 
     if st.session_state.apa_refs:
@@ -303,5 +282,4 @@ elif st.session_state.step == 4:
         full_text = f"# {st.session_state.final_title}\n\n"
         for i in range(1, 6): full_text += st.session_state.content.get(f'ch{i}', '') + "\n\n"
         full_text += "\n\n## 參考文獻\n" + st.session_state.apa_refs
-        
         st.download_button("📥 下載完整論文", full_text, "Thesis_Final.md")
