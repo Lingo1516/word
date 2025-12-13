@@ -5,27 +5,26 @@ import urllib.parse
 from google.api_core import exceptions
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (SDK 升級版)", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="論文寫作助手 (SDK 完整版)", layout="wide", page_icon="🧠")
 
-# --- 核心 1: 掃描模型 (改用 SDK) ---
+# --- 核心 1: 掃描模型 (SDK版) ---
 def get_available_models(api_key):
     try:
         genai.configure(api_key=api_key)
         model_list = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                # 只留下 gemini 開頭的模型，排除舊版 embedding 模型
+                # 只留下 gemini 開頭的模型
                 if 'gemini' in m.name:
                     clean_name = m.name.replace('models/', '')
                     model_list.append(clean_name)
-        # 簡單排序，讓 pro 或 flash 排前面
+        # 排序：優先顯示 1.5 系列
         model_list.sort(key=lambda x: x if '1.5' in x else 'z'+x) 
         return model_list
     except Exception as e:
-        st.error(f"模型列表讀取失敗: {e}")
         return []
 
-# --- 核心 2: 圖表代碼清洗 (維持原樣) ---
+# --- 核心 2: 圖表代碼清洗 ---
 def clean_graphviz_code(raw_code):
     clean = raw_code.replace("```dot", "").replace("```", "").strip()
     if "rankdir" not in clean:
@@ -38,7 +37,7 @@ def clean_graphviz_code(raw_code):
     if start != -1 and end != -1: return f"digraph G {clean[start:end+1]}"
     return clean
 
-# --- 核心 3: 圖片標籤 (維持原樣) ---
+# --- 核心 3: 圖片標籤 ---
 def get_graph_img_tag(dot_code):
     if not dot_code: return ""
     encoded_dot = urllib.parse.quote(dot_code)
@@ -50,24 +49,23 @@ def get_graph_img_tag(dot_code):
     <br>
     '''
 
-# --- 核心 4: 寫作函式 (改用 SDK + System Instruction) ---
+# --- 核心 4: 寫作函式 (SDK + System Instruction) ---
 def ask_gemini(prompt, api_key, model_name, user_rules=""):
     if not api_key: return "⚠️ 請設定 Key"
     
     try:
         genai.configure(api_key=api_key)
         
-        # 【升級點】將規則放入 system_instruction，效果比單純拼字串好
+        # 設定系統指令 (讓 AI 永遠記得規則)
         sys_instruction = "你是一個專業的學術論文寫作助手。請使用繁體中文。"
         if user_rules:
-            sys_instruction += f"\n\n【使用者強制規則 (必須嚴格遵守)】\n{user_rules}"
+            sys_instruction += f"\n\n【使用者最高優先級規則】\n{user_rules}"
 
         model = genai.GenerativeModel(
             model_name=model_name,
             system_instruction=sys_instruction
         )
         
-        # 設定生成參數 (降低隨機性以符合學術需求)
         generation_config = genai.types.GenerationConfig(
             temperature=0.7, 
         )
@@ -82,7 +80,7 @@ def ask_gemini(prompt, api_key, model_name, user_rules=""):
     except Exception as e:
         return f"❌ 發生錯誤：{str(e)}"
 
-# --- 初始化 (維持原樣) ---
+# --- 初始化 Session State ---
 if 'step' not in st.session_state: st.session_state.step = 0
 if 'current_ch_index' not in st.session_state: st.session_state.current_ch_index = 0 
 if 'proposed_titles' not in st.session_state: st.session_state.proposed_titles = []
@@ -110,26 +108,35 @@ with st.sidebar:
     
     if api_key:
         st.success("✅ 金鑰已載入")
-        # 自動執行一次模型掃描，不需要按鈕
-        if not st.session_state.my_models:
-             with st.spinner("連接 Google AI..."):
+        
+        # 【按鈕加回來了】讓你可以手動測試
+        if st.button("🔄 掃描/測試可用模型"):
+             with st.spinner("正在連接 Google 伺服器..."):
                 found = get_available_models(api_key)
-                if found: st.session_state.my_models = found
-                else: st.error("找不到可用模型，請檢查 API Key 權限")
+                if found: 
+                    st.session_state.my_models = found
+                    st.success(f"成功連線！找到 {len(found)} 個模型")
+                else: 
+                    st.error("連線失敗，請檢查 Key 或網路")
 
-    # 預設選單，如果抓不到模型就顯示預設值
+    # 模型選單
     model_options = st.session_state.my_models if st.session_state.my_models else ["gemini-1.5-flash", "gemini-1.5-pro"]
-    
-    # 智慧選擇預設值
     default_index = 0
     for i, m in enumerate(model_options):
-        if 'flash' in m: default_index = i # 優先選 flash 因為比較快且便宜
+        if 'flash' in m: default_index = i
         
-    selected_model = st.selectbox("選擇模型", model_options, index=default_index)
+    st.markdown("### 🤖 選擇模型")
+    selected_model = st.selectbox("目前使用：", model_options, index=default_index)
+    
+    # 模型說明提示
+    if "flash" in selected_model:
+        st.caption("🚀 **Flash**: 速度快，適合測試、大綱或一般內容。")
+    elif "pro" in selected_model:
+        st.caption("🧠 **Pro**: 邏輯強，適合正式論文寫作與複雜推論。")
     
     st.divider()
-    st.header("🧠 2. 記憶與規則 (System Instruction)")
-    st.info("現在使用系統級指令，AI 會更嚴格遵守！")
+    st.header("🧠 2. 記憶與規則")
+    st.info("這裡設定的規則，AI 在寫作每一章時都會記得！")
     
     user_rules = st.text_area(
         "⚠️ 寫作禁忌與格式要求：",
@@ -142,7 +149,6 @@ with st.sidebar:
     st.header("📝 3. 論文規格")
     paper_type = st.radio("寫作格式", ["學位論文 (Thesis)", "期刊論文 (Journal)"])
     
-    # 章節定義 (維持原樣)
     if paper_type == "學位論文 (Thesis)":
         CHAPTERS = [
             {"key": "ch1", "name": "第一章 緒論", "prompt": "背景、動機、目的、範圍與限制"},
@@ -188,9 +194,9 @@ with st.sidebar:
         num_crits = st.number_input("準則數量(每構面)", 2, 10, 4)
 
 # --- 主畫面 ---
-st.title("🧠 論文寫作助手 (SDK 穩定版)")
+st.title("🧠 論文寫作助手 (SDK 完整版)")
 
-if not api_key: st.warning("請先在側邊欄輸入 API Key"); st.stop()
+if not api_key: st.warning("⬅️ 請先在側邊欄輸入 API Key"); st.stop()
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -200,7 +206,8 @@ if st.session_state.step == 0:
         else:
             with st.spinner("構思中..."):
                 prompt = f"關鍵字：{keywords_str}。方法：{final_method}。格式：{paper_type}。請產生 3 個繁體中文學術題目。"
-                res = ask_gemini(prompt, api_key, selected_model) # 規則已在 ask_gemini 內部透過 global_rules 注入
+                # 規則會自動透過 System Instruction 注入，這裡只要傳 Prompt
+                res = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
                 titles = [t.strip() for t in res.split('\n') if t.strip() and not t.startswith("Here")]
                 st.session_state.proposed_titles = [re.sub(r'^\d+\.\s*', '', t).replace('*', '').strip() for t in titles if t.strip()]
                 st.rerun()
@@ -227,7 +234,7 @@ elif st.session_state.step == 1:
 
 # === 步驟 1.5: 架構 ===
 elif st.session_state.step == 1.5:
-    st.subheader("步驟 1.5：建構架構")
+    st.subheader("步驟 1.5：建構評估體系")
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -241,7 +248,7 @@ elif st.session_state.step == 1.5:
                     任務：建立評估指標體系 ({num_dims}構面 x {num_crits}準則)。
                     請輸出 Markdown 列表。
                     """
-                    st.session_state.framework = ask_gemini(prompt, api_key, selected_model)
+                    st.session_state.framework = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
                     st.rerun()
         
         if st.session_state.framework:
@@ -252,7 +259,7 @@ elif st.session_state.step == 1.5:
             if st.button("📊 繪製直式架構圖"):
                 with st.spinner("繪圖中..."):
                     graph_prompt = f"請根據以下架構，生成 Graphviz DOT 代碼。Rankdir=TB (直式)。\n{st.session_state.framework}"
-                    code_res = ask_gemini(graph_prompt, api_key, selected_model)
+                    code_res = ask_gemini(graph_prompt, api_key, selected_model, st.session_state.global_rules)
                     st.session_state.framework_dot = clean_graphviz_code(code_res)
                     st.rerun()
 
@@ -280,7 +287,7 @@ elif st.session_state.step == 2:
             架構：{st.session_state.framework}
             請寫出大綱。
             """
-            st.session_state.outline = ask_gemini(prompt, api_key, selected_model)
+            st.session_state.outline = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
             st.rerun()
             
     if st.session_state.outline:
@@ -313,7 +320,7 @@ elif st.session_state.step == 3:
                     elif "第四章" in ch_name or "結果" in ch_name: 
                         extra_instruction = "模擬豐富顯著數據，使用 Markdown 表格。"
                         graph_p = f"針對 {final_method} 分析結果，畫出直式(TB)關係圖。回傳 DOT code。"
-                        code = ask_gemini(graph_p, api_key, selected_model)
+                        code = ask_gemini(graph_p, api_key, selected_model, st.session_state.global_rules)
                         st.session_state.graph_code = clean_graphviz_code(code)
 
                     prompt = f"""
@@ -322,12 +329,12 @@ elif st.session_state.step == 3:
                     架構：{st.session_state.framework}。文獻：{st.session_state.refs}。
                     {extra_instruction}
                     """
-                    res = ask_gemini(prompt, api_key, selected_model)
+                    res = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
                     st.session_state.content[ch_key] = res
                     
                     if ("第二章" in ch_name or "文獻" in ch_name) and st.session_state.framework:
                         graph_p = f"根據架構 {st.session_state.framework}，繪製直式(TB)觀念架構圖。回傳 DOT code。"
-                        code = ask_gemini(graph_p, api_key, selected_model)
+                        code = ask_gemini(graph_p, api_key, selected_model, st.session_state.global_rules)
                         st.session_state.concept_map_code = clean_graphviz_code(code)
                     st.rerun()
         else:
@@ -353,7 +360,7 @@ elif st.session_state.step == 3:
                             st.session_state.global_rules += f"\n- {feedback}"
                         
                         fix_prompt = f"重寫「{ch_name}」。原稿：{current_content}。意見：{feedback}。"
-                        new_content = ask_gemini(fix_prompt, api_key, selected_model)
+                        new_content = ask_gemini(fix_prompt, api_key, selected_model, st.session_state.global_rules)
                         st.session_state.content[ch_key] = new_content
                         st.rerun()
             with col2:
@@ -375,7 +382,7 @@ elif st.session_state.step == 4:
         if st.button("📄 生成 APA"):
             with st.spinner("整理中..."):
                 apa_prompt = f"整理 APA 7th 參考文獻：\n{st.session_state.refs}"
-                st.session_state.apa_refs = ask_gemini(apa_prompt, api_key, selected_model)
+                st.session_state.apa_refs = ask_gemini(apa_prompt, api_key, selected_model, st.session_state.global_rules)
                 st.rerun()
     
     if st.session_state.apa_refs:
@@ -384,7 +391,7 @@ elif st.session_state.step == 4:
         chapter_options['ref'] = "參考文獻 (APA)"
         selected_chapters = st.multiselect("勾選下載章節", list(chapter_options.keys()), default=list(chapter_options.keys()))
         
-        # 建立 HTML
+        # 建立內容
         html_body = f"<h1 style='text-align:center;'>{st.session_state.final_title}</h1>"
         final_text = f"# {st.session_state.final_title}\n\n" 
         
