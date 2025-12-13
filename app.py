@@ -5,22 +5,38 @@ import urllib.parse
 from google.api_core import exceptions
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (完整修復版)", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="論文寫作助手 (智慧精簡版)", layout="wide", page_icon="🧠")
 
-# --- 核心 1: 掃描模型 (SDK版) ---
-def get_available_models(api_key):
+# --- 核心 1: 智慧掃描模型 (只留最強的兩個) ---
+def get_best_models(api_key):
     try:
         genai.configure(api_key=api_key)
-        model_list = []
+        all_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                # 只留下 gemini 開頭的模型
-                if 'gemini' in m.name:
-                    clean_name = m.name.replace('models/', '')
-                    model_list.append(clean_name)
-        # 排序：優先顯示 1.5 系列
-        model_list.sort(key=lambda x: x if '1.5' in x else 'z'+x) 
-        return model_list
+                name = m.name.replace('models/', '')
+                all_models.append(name)
+        
+        # --- 關鍵修改：只鎖定這兩個最好用的模型 ---
+        # 邏輯：如果帳號權限夠，優先抓 1.5-pro，其次 1.5-flash
+        # 這樣你就不用在 20 幾個模型裡大海撈針
+        recommended = []
+        
+        # 1. 找 Pro (寫論文邏輯最強)
+        pro_candidates = [m for m in all_models if 'gemini-1.5-pro' in m and 'latest' in m]
+        if not pro_candidates: # 如果沒有 latest，找一般版
+            pro_candidates = [m for m in all_models if 'gemini-1.5-pro' in m]
+        if pro_candidates: recommended.append(pro_candidates[0]) # 只取第一個找到的
+        
+        # 2. 找 Flash (速度最快)
+        flash_candidates = [m for m in all_models if 'gemini-1.5-flash' in m and 'latest' in m]
+        if not flash_candidates:
+            flash_candidates = [m for m in all_models if 'gemini-1.5-flash' in m]
+        if flash_candidates: recommended.append(flash_candidates[0])
+
+        # 如果上面都找不到 (極少見)，才回傳全部，避免壞掉
+        return recommended if recommended else all_models
+
     except Exception as e:
         return []
 
@@ -56,7 +72,6 @@ def ask_gemini(prompt, api_key, model_name, user_rules=""):
     try:
         genai.configure(api_key=api_key)
         
-        # 設定系統指令 (讓 AI 永遠記得規則)
         sys_instruction = "你是一個專業的學術論文寫作助手。請使用繁體中文。"
         if user_rules:
             sys_instruction += f"\n\n【使用者最高優先級規則】\n{user_rules}"
@@ -107,38 +122,39 @@ with st.sidebar:
         if user_key: api_key = user_key
     
     if api_key:
-        st.success("✅ 金鑰已載入")
-        
-        # 手動測試按鈕
-        if st.button("🔄 掃描/測試可用模型"):
-             with st.spinner("正在連接 Google 伺服器..."):
-                found = get_available_models(api_key)
+        # 自動初始化：只要有 Key 就先預設兩個最好的，不用等按鈕
+        if not st.session_state.my_models:
+             st.session_state.my_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
+
+        # 手動更新按鈕 (現在只會抓最好的)
+        if st.button("🔄 檢查連線 & 更新模型"):
+             with st.spinner("正在尋找最佳模型..."):
+                found = get_best_models(api_key)
                 if found: 
                     st.session_state.my_models = found
-                    st.success(f"成功連線！找到 {len(found)} 個模型")
+                    st.success(f"已鎖定 {len(found)} 個最佳模型！")
                 else: 
-                    st.error("連線失敗，請檢查 Key 或網路")
+                    st.error("連線失敗")
 
     # 模型選單
-    model_options = st.session_state.my_models if st.session_state.my_models else ["gemini-1.5-flash", "gemini-1.5-pro"]
-    default_index = 0
-    for i, m in enumerate(model_options):
-        if 'flash' in m: default_index = i
-        
-    st.markdown("### 🤖 選擇模型")
-    selected_model = st.selectbox("目前使用：", model_options, index=default_index)
+    model_options = st.session_state.my_models if st.session_state.my_models else ["gemini-1.5-pro", "gemini-1.5-flash"]
     
-    if "flash" in selected_model:
-        st.caption("🚀 **Flash**: 速度快，適合測試、大綱或一般內容。")
-    elif "pro" in selected_model:
-        st.caption("🧠 **Pro**: 邏輯強，適合正式論文寫作與複雜推論。")
+    # 預設直接選第一個 (通常是 Pro，因為前面邏輯把 Pro 排在第一個)
+    st.markdown("### 🤖 選擇模型")
+    selected_model = st.selectbox("目前使用：", model_options, index=0)
+    
+    # 簡潔的提示
+    if "pro" in selected_model:
+        st.info("✅ **已選擇 Pro**：邏輯最強，適合寫論文內文。")
+    elif "flash" in selected_model:
+        st.info("⚡ **已選擇 Flash**：速度最快，適合產生大綱或測試。")
     
     st.divider()
     st.header("🧠 2. 記憶與規則")
-    st.info("這裡設定的規則，AI 在寫作每一章時都會記得！")
+    st.info("AI 將嚴格遵守以下規則：")
     
     user_rules = st.text_area(
-        "⚠️ 寫作禁忌與格式要求：",
+        "⚠️ 寫作禁忌：",
         value=st.session_state.global_rules,
         height=150,
     )
@@ -179,7 +195,6 @@ with st.sidebar:
     num_dims = 3
     num_crits = 4
 
-    # --- 這裡包含了 FCM 的修正 ---
     if "MCDM" in method_category:
         st.markdown("#### ☑️ MCDM 方法")
         mcdm_tools = st.multiselect(
@@ -194,7 +209,7 @@ with st.sidebar:
         num_crits = st.number_input("準則數量(每構面)", 2, 10, 4)
 
 # --- 主畫面 ---
-st.title("🧠 論文寫作助手 (SDK 完整版)")
+st.title("🧠 論文寫作助手 (智慧精簡版)")
 
 if not api_key: st.warning("⬅️ 請先在側邊欄輸入 API Key"); st.stop()
 
