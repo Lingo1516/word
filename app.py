@@ -3,14 +3,14 @@ from groq import Groq
 import time
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (Groq全功能版)", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="論文寫作助手 (Groq Llama 3.3版)", layout="wide", page_icon="⚡")
 
 # ==========================================
 # ⚡⚡⚡ 你的 Groq Key (已鎖定) ⚡⚡⚡
 FIXED_KEY = "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"
 # ==========================================
 
-# --- 核心：Groq 引擎 ---
+# --- 核心：Groq 引擎 (升級至 Llama 3.3) ---
 def ask_groq_fast(prompt, user_rules=""):
     # 設定 Client
     client = Groq(api_key=FIXED_KEY)
@@ -21,13 +21,14 @@ def ask_groq_fast(prompt, user_rules=""):
         system_msg += f"\n【請嚴格遵守規則】：{user_rules}"
 
     try:
-        # 發送請求 (使用 Llama-3-70b)
+        # 發送請求
+        # ⚠️ 關鍵修正：換成最新的 llama-3.3-70b-versatile
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
             ],
-            model="llama3-70b-8192", 
+            model="llama-3.3-70b-versatile", 
             temperature=0.6, 
             max_tokens=4096,
         )
@@ -47,8 +48,8 @@ if 'global_rules' not in st.session_state:
 
 # --- 側邊欄 (完整功能) ---
 with st.sidebar:
-    st.header("⚡ 引擎：Groq Llama 3")
-    st.success("✅ 已鎖定 Key，連線正常")
+    st.header("⚡ 引擎：Llama 3.3 (最新)")
+    st.success("✅ 已修復模型版本")
     
     st.divider()
 
@@ -69,7 +70,7 @@ with st.sidebar:
 
     st.divider()
 
-    # 2. 研究方法 (包含你要的 FCM)
+    # 2. 研究方法 (包含 FCM)
     st.subheader("📊 研究方法")
     method_category = st.selectbox("方法分類", 
         ["MCDM (多準則決策)", "量化研究 (問卷/統計)", "質性研究 (訪談/個案)", "混合研究"]
@@ -112,7 +113,7 @@ with st.sidebar:
     st.session_state.global_rules = rules
 
 # --- 主畫面 ---
-st.title("⚡ 論文寫作助手 (Groq 全功能版)")
+st.title("⚡ 論文寫作助手 (Groq Llama 3.3版)")
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -121,7 +122,7 @@ if st.session_state.step == 0:
         if not keywords_str:
             st.error("請在側邊欄選擇或輸入關鍵字")
         else:
-            with st.spinner("AI 思考中..."):
+            with st.spinner("Llama 3.3 思考中..."):
                 prompt = f"領域：管理科學與工程。關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文博士論文題目，並附帶簡短設計理念。"
                 st.session_state.generated_titles = ask_groq_fast(prompt, st.session_state.global_rules)
     
@@ -129,12 +130,15 @@ if st.session_state.step == 0:
         st.info("💡 參考題目：")
         st.markdown(st.session_state.generated_titles)
 
-    title_input = st.text_input("👇 輸入最終題目", value=st.session_state.final_title)
-    if st.button("下一步"):
+    st.markdown("---")
+    title_input = st.text_input("👇 輸入最終題目 (或從上面複製貼上)", value=st.session_state.final_title)
+    if st.button("✅ 鎖定題目，下一步"):
         if title_input:
             st.session_state.final_title = title_input
             st.session_state.step = 1
             st.rerun()
+        else:
+            st.warning("請輸入題目")
 
 # === 步驟 1: 文獻 ===
 elif st.session_state.step == 1:
