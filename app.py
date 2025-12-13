@@ -5,7 +5,7 @@ import urllib.parse
 from google.api_core import exceptions
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (SDK 完整版)", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="論文寫作助手 (完整修復版)", layout="wide", page_icon="🧠")
 
 # --- 核心 1: 掃描模型 (SDK版) ---
 def get_available_models(api_key):
@@ -109,7 +109,7 @@ with st.sidebar:
     if api_key:
         st.success("✅ 金鑰已載入")
         
-        # 【按鈕加回來了】讓你可以手動測試
+        # 手動測試按鈕
         if st.button("🔄 掃描/測試可用模型"):
              with st.spinner("正在連接 Google 伺服器..."):
                 found = get_available_models(api_key)
@@ -128,7 +128,6 @@ with st.sidebar:
     st.markdown("### 🤖 選擇模型")
     selected_model = st.selectbox("目前使用：", model_options, index=default_index)
     
-    # 模型說明提示
     if "flash" in selected_model:
         st.caption("🚀 **Flash**: 速度快，適合測試、大綱或一般內容。")
     elif "pro" in selected_model:
@@ -180,11 +179,12 @@ with st.sidebar:
     num_dims = 3
     num_crits = 4
 
+    # --- 這裡包含了 FCM 的修正 ---
     if "MCDM" in method_category:
         st.markdown("#### ☑️ MCDM 方法")
         mcdm_tools = st.multiselect(
             "選擇方法：", 
-            ["Delphi", "AHP", "ANP", "DEMATEL", "DANP", "TOPSIS", "VIKOR"],
+            ["Delphi", "Fuzzy Delphi", "AHP", "Fuzzy AHP", "ANP", "DEMATEL", "DANP", "FCM", "TOPSIS", "VIKOR"],
             default=["Delphi", "AHP"]
         )
         final_method = f"多準則決策 ({' + '.join(mcdm_tools)})" if mcdm_tools else "多準則決策"
@@ -206,7 +206,6 @@ if st.session_state.step == 0:
         else:
             with st.spinner("構思中..."):
                 prompt = f"關鍵字：{keywords_str}。方法：{final_method}。格式：{paper_type}。請產生 3 個繁體中文學術題目。"
-                # 規則會自動透過 System Instruction 注入，這裡只要傳 Prompt
                 res = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
                 titles = [t.strip() for t in res.split('\n') if t.strip() and not t.startswith("Here")]
                 st.session_state.proposed_titles = [re.sub(r'^\d+\.\s*', '', t).replace('*', '').strip() for t in titles if t.strip()]
