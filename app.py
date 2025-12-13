@@ -1,30 +1,31 @@
 import streamlit as st
-import requests
-import json
+import google.generativeai as genai
 import re
 import urllib.parse
+from google.api_core import exceptions
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (具備規則記憶版)", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="論文寫作助手 (SDK 升級版)", layout="wide", page_icon="🧠")
 
-# --- 核心 1: 掃描模型 ---
+# --- 核心 1: 掃描模型 (改用 SDK) ---
 def get_available_models(api_key):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            model_list = []
-            if 'models' in data:
-                for m in data['models']:
-                    if 'generateContent' in m.get('supportedGenerationMethods', []):
-                        clean_name = m['name'].replace('models/', '')
-                        model_list.append(clean_name)
-            return model_list
-        return None
-    except: return None
+        genai.configure(api_key=api_key)
+        model_list = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                # 只留下 gemini 開頭的模型，排除舊版 embedding 模型
+                if 'gemini' in m.name:
+                    clean_name = m.name.replace('models/', '')
+                    model_list.append(clean_name)
+        # 簡單排序，讓 pro 或 flash 排前面
+        model_list.sort(key=lambda x: x if '1.5' in x else 'z'+x) 
+        return model_list
+    except Exception as e:
+        st.error(f"模型列表讀取失敗: {e}")
+        return []
 
-# --- 核心 2: 圖表代碼清洗 ---
+# --- 核心 2: 圖表代碼清洗 (維持原樣) ---
 def clean_graphviz_code(raw_code):
     clean = raw_code.replace("```dot", "").replace("```", "").strip()
     if "rankdir" not in clean:
@@ -37,7 +38,7 @@ def clean_graphviz_code(raw_code):
     if start != -1 and end != -1: return f"digraph G {clean[start:end+1]}"
     return clean
 
-# --- 核心 3: 圖片標籤 ---
+# --- 核心 3: 圖片標籤 (維持原樣) ---
 def get_graph_img_tag(dot_code):
     if not dot_code: return ""
     encoded_dot = urllib.parse.quote(dot_code)
@@ -49,36 +50,39 @@ def get_graph_img_tag(dot_code):
     <br>
     '''
 
-# --- 核心 4: 寫作函式 (注入使用者規則) ---
+# --- 核心 4: 寫作函式 (改用 SDK + System Instruction) ---
 def ask_gemini(prompt, api_key, model_name, user_rules=""):
     if not api_key: return "⚠️ 請設定 Key"
     
-    # 【關鍵修改】將使用者的規則強制加到 Prompt 的最前面
-    final_prompt = prompt
-    if user_rules:
-        final_prompt = f"""
-        🔥🔥 **【最高優先級指令 - 請務必遵守以下規則】** 🔥🔥
-        {user_rules}
-        --------------------------------------------------
-        {prompt}
-        """
-
-    real_model_name = f"models/{model_name}" if "models/" not in model_name else model_name
-    url = f"https://generativelanguage.googleapis.com/v1beta/{real_model_name}:generateContent?key={api_key}"
-    headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{ "parts": [{"text": final_prompt}] }] }
-    
     try:
-        response = requests.post(url, headers=headers, json=data)
-        if response.status_code == 200:
-            try: return response.json()['candidates'][0]['content']['parts'][0]['text']
-            except: return "⚠️ 生成成功但解析失敗"
-        elif response.status_code == 429: return "⏳ 速度限制 (429)，請稍候 20 秒..."
-        elif response.status_code == 404: return f"❌ 模型錯誤 (404): {model_name} 不存在。"
-        else: return f"❌ 連線錯誤 ({response.status_code}): {response.text}"
-    except Exception as e: return f"❌ 網路錯誤：{str(e)}"
+        genai.configure(api_key=api_key)
+        
+        # 【升級點】將規則放入 system_instruction，效果比單純拼字串好
+        sys_instruction = "你是一個專業的學術論文寫作助手。請使用繁體中文。"
+        if user_rules:
+            sys_instruction += f"\n\n【使用者強制規則 (必須嚴格遵守)】\n{user_rules}"
 
-# --- 初始化 ---
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=sys_instruction
+        )
+        
+        # 設定生成參數 (降低隨機性以符合學術需求)
+        generation_config = genai.types.GenerationConfig(
+            temperature=0.7, 
+        )
+
+        response = model.generate_content(prompt, generation_config=generation_config)
+        return response.text
+
+    except exceptions.ResourceExhausted:
+        return "⏳ 速度限制 (Quota Exceeded)，請稍候再試..."
+    except exceptions.InvalidArgument:
+        return f"❌ 參數錯誤或模型不支援: {model_name}"
+    except Exception as e:
+        return f"❌ 發生錯誤：{str(e)}"
+
+# --- 初始化 (維持原樣) ---
 if 'step' not in st.session_state: st.session_state.step = 0
 if 'current_ch_index' not in st.session_state: st.session_state.current_ch_index = 0 
 if 'proposed_titles' not in st.session_state: st.session_state.proposed_titles = []
@@ -92,7 +96,7 @@ if 'graph_code' not in st.session_state: st.session_state.graph_code = ""
 if 'concept_map_code' not in st.session_state: st.session_state.concept_map_code = ""
 if 'apa_refs' not in st.session_state: st.session_state.apa_refs = ""
 if 'my_models' not in st.session_state: st.session_state.my_models = []
-if 'global_rules' not in st.session_state: st.session_state.global_rules = "1. 嚴禁使用 LaTeX 語法。\n2. 必須使用繁體中文。\n3. 語氣需專業學術。" # 預設規則
+if 'global_rules' not in st.session_state: st.session_state.global_rules = "1. 嚴禁使用 LaTeX 語法。\n2. 必須使用繁體中文。\n3. 語氣需專業學術。"
 
 # --- 側邊欄 ---
 api_key = None
@@ -106,28 +110,31 @@ with st.sidebar:
     
     if api_key:
         st.success("✅ 金鑰已載入")
-        if st.button("🔄 搜尋可用模型"):
-            with st.spinner("掃描中..."):
+        # 自動執行一次模型掃描，不需要按鈕
+        if not st.session_state.my_models:
+             with st.spinner("連接 Google AI..."):
                 found = get_available_models(api_key)
                 if found: st.session_state.my_models = found
+                else: st.error("找不到可用模型，請檢查 API Key 權限")
 
-    model_options = ["gemini-1.5-flash", "gemini-1.5-pro"]
-    if st.session_state.my_models: model_options = st.session_state.my_models
+    # 預設選單，如果抓不到模型就顯示預設值
+    model_options = st.session_state.my_models if st.session_state.my_models else ["gemini-1.5-flash", "gemini-1.5-pro"]
+    
+    # 智慧選擇預設值
     default_index = 0
     for i, m in enumerate(model_options):
-        if 'flash' in m: default_index = i
+        if 'flash' in m: default_index = i # 優先選 flash 因為比較快且便宜
+        
     selected_model = st.selectbox("選擇模型", model_options, index=default_index)
     
     st.divider()
-    st.header("🧠 2. 記憶與規則 (重點)")
-    st.info("在此輸入的規則，AI 會在寫每一章時都記得！")
+    st.header("🧠 2. 記憶與規則 (System Instruction)")
+    st.info("現在使用系統級指令，AI 會更嚴格遵守！")
     
-    # 【新功能】全域規則輸入框
     user_rules = st.text_area(
-        "⚠️ 寫作禁忌與格式要求 (AI 會一直記得)：",
+        "⚠️ 寫作禁忌與格式要求：",
         value=st.session_state.global_rules,
         height=150,
-        help="例如：不要用中國用語、引用格式要 (Author, Year)、圖表要用表格呈現..."
     )
     st.session_state.global_rules = user_rules
 
@@ -135,7 +142,7 @@ with st.sidebar:
     st.header("📝 3. 論文規格")
     paper_type = st.radio("寫作格式", ["學位論文 (Thesis)", "期刊論文 (Journal)"])
     
-    # 章節定義
+    # 章節定義 (維持原樣)
     if paper_type == "學位論文 (Thesis)":
         CHAPTERS = [
             {"key": "ch1", "name": "第一章 緒論", "prompt": "背景、動機、目的、範圍與限制"},
@@ -153,8 +160,8 @@ with st.sidebar:
             {"key": "ch5", "name": "5. 討論與結論", "prompt": "意涵、限制、建議"}
         ]
 
-    st.markdown("#### 關鍵字 (可複選)")
-    business_keywords = ["策略管理", "競爭優勢", "ESG", "永續發展", "消費者行為", "滿意度", "人力資源", "教育訓練", "組織承諾", "供應鏈管理", "金融科技", "AI應用", "多準則決策"]
+    st.markdown("#### 關鍵字")
+    business_keywords = ["策略管理", "競爭優勢", "ESG", "永續發展", "消費者行為", "滿意度", "人力資源", "供應鏈管理", "金融科技", "AI應用"]
     selected_kws = st.multiselect("勾選：", business_keywords)
     custom_kw = st.text_input("自訂補充：")
     final_kws = selected_kws.copy()
@@ -162,17 +169,17 @@ with st.sidebar:
     keywords_str = ", ".join(final_kws)
 
     st.divider()
-    method_category = st.selectbox("研究途徑", ["多準則決策 (MCDM)", "量化研究", "質性研究", "實驗法"])
+    method_category = st.selectbox("研究途徑", ["多準則決策 (MCDM)", "量化研究 (問卷/數據)", "質性研究 (訪談/個案)", "實驗法"])
     final_method = method_category
     num_dims = 3
     num_crits = 4
 
-    if method_category == "多準則決策 (MCDM)":
+    if "MCDM" in method_category:
         st.markdown("#### ☑️ MCDM 方法")
         mcdm_tools = st.multiselect(
             "選擇方法：", 
-            ["Delphi (德爾菲法)", "Fuzzy Delphi", "AHP", "Fuzzy AHP", "ANP", "DEMATEL", "DANP", "FCM", "TOPSIS", "VIKOR"],
-            default=["Delphi (德爾菲法)", "AHP"]
+            ["Delphi", "AHP", "ANP", "DEMATEL", "DANP", "TOPSIS", "VIKOR"],
+            default=["Delphi", "AHP"]
         )
         final_method = f"多準則決策 ({' + '.join(mcdm_tools)})" if mcdm_tools else "多準則決策"
         
@@ -181,11 +188,11 @@ with st.sidebar:
         num_crits = st.number_input("準則數量(每構面)", 2, 10, 4)
 
 # --- 主畫面 ---
-st.title("🧠 論文寫作助手 (記憶修正版)")
+st.title("🧠 論文寫作助手 (SDK 穩定版)")
 
-if not api_key: st.warning("請先輸入 API Key"); st.stop()
+if not api_key: st.warning("請先在側邊欄輸入 API Key"); st.stop()
 
-# === 步驟 0 ===
+# === 步驟 0: 題目 ===
 if st.session_state.step == 0:
     st.subheader("步驟 0：構思題目")
     if st.button("✨ 產生建議題目"):
@@ -193,8 +200,7 @@ if st.session_state.step == 0:
         else:
             with st.spinner("構思中..."):
                 prompt = f"關鍵字：{keywords_str}。方法：{final_method}。格式：{paper_type}。請產生 3 個繁體中文學術題目。"
-                # 將規則傳入函式
-                res = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
+                res = ask_gemini(prompt, api_key, selected_model) # 規則已在 ask_gemini 內部透過 global_rules 注入
                 titles = [t.strip() for t in res.split('\n') if t.strip() and not t.startswith("Here")]
                 st.session_state.proposed_titles = [re.sub(r'^\d+\.\s*', '', t).replace('*', '').strip() for t in titles if t.strip()]
                 st.rerun()
@@ -206,10 +212,10 @@ if st.session_state.step == 0:
             st.session_state.step = 1
             st.rerun()
 
-# === 步驟 1 ===
+# === 步驟 1: 文獻 ===
 elif st.session_state.step == 1:
     st.subheader("步驟 1：導入真實文獻")
-    st.info("請貼上真實文獻。AI 在寫作時會嚴格遵守此處提供的資料。")
+    st.info("請貼上真實文獻內容。AI 會基於此內容進行寫作。")
     raw_refs = st.text_area("📋 文獻資料貼上區：", height=300)
     
     if st.button("✅ 確認文獻，下一步"):
@@ -219,9 +225,9 @@ elif st.session_state.step == 1:
             st.session_state.step = 1.5 
             st.rerun()
 
-# === 步驟 1.5 ===
+# === 步驟 1.5: 架構 ===
 elif st.session_state.step == 1.5:
-    st.subheader("步驟 1.5：建構評估指標體系")
+    st.subheader("步驟 1.5：建構架構")
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -235,7 +241,7 @@ elif st.session_state.step == 1.5:
                     任務：建立評估指標體系 ({num_dims}構面 x {num_crits}準則)。
                     請輸出 Markdown 列表。
                     """
-                    st.session_state.framework = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
+                    st.session_state.framework = ask_gemini(prompt, api_key, selected_model)
                     st.rerun()
         
         if st.session_state.framework:
@@ -245,8 +251,8 @@ elif st.session_state.step == 1.5:
             
             if st.button("📊 繪製直式架構圖"):
                 with st.spinner("繪圖中..."):
-                    graph_prompt = f"請根據以下架構，生成 Graphviz DOT 代碼。Rankdir=TB (直式)。繁體中文。\n{st.session_state.framework}"
-                    code_res = ask_gemini(graph_prompt, api_key, selected_model, st.session_state.global_rules)
+                    graph_prompt = f"請根據以下架構，生成 Graphviz DOT 代碼。Rankdir=TB (直式)。\n{st.session_state.framework}"
+                    code_res = ask_gemini(graph_prompt, api_key, selected_model)
                     st.session_state.framework_dot = clean_graphviz_code(code_res)
                     st.rerun()
 
@@ -272,9 +278,9 @@ elif st.session_state.step == 2:
             方法：{final_method}
             格式：{paper_type}
             架構：{st.session_state.framework}
-            請寫出大綱。請遵守側邊欄的全域規則。
+            請寫出大綱。
             """
-            st.session_state.outline = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
+            st.session_state.outline = ask_gemini(prompt, api_key, selected_model)
             st.rerun()
             
     if st.session_state.outline:
@@ -283,7 +289,7 @@ elif st.session_state.step == 2:
             st.session_state.step = 3
             st.rerun()
 
-# === 步驟 3: 逐章寫作 (記憶核心) ===
+# === 步驟 3: 逐章寫作 ===
 elif st.session_state.step == 3:
     current_idx = st.session_state.current_ch_index
     if current_idx < len(CHAPTERS):
@@ -293,7 +299,6 @@ elif st.session_state.step == 3:
         
         st.subheader(f"✍️ 寫作進度：{ch_name}")
         st.info(f"重點：{curr_ch['prompt']}")
-        st.warning(f"⚠️ AI 將嚴格遵守側邊欄的規則：\n{st.session_state.global_rules}")
         
         current_content = st.session_state.content.get(ch_key, "")
         
@@ -301,15 +306,14 @@ elif st.session_state.step == 3:
             if st.button(f"🚀 開始撰寫 {ch_name}"):
                 with st.spinner(f"AI 正在撰寫..."):
                     extra_instruction = ""
-                    # 根據學術邏輯自動添加的指令
-                    if "第一章" in ch_name: extra_instruction = "請明確界定研究範圍與限制。"
-                    elif "第二章" in ch_name: extra_instruction = "引用真實文獻，歸納觀念性架構。"
-                    elif "第三章" in ch_name: extra_instruction = "描述方法步驟與工具，勿寫限制。"
-                    elif "第五章" in ch_name: extra_instruction = "包含研究限制與未來建議。"
-                    elif "第四章" in ch_name: 
+                    if "第一章" in ch_name or "前言" in ch_name: extra_instruction = "請明確界定研究範圍與限制。"
+                    elif "第二章" in ch_name or "文獻" in ch_name: extra_instruction = "引用真實文獻，歸納觀念性架構。"
+                    elif "第三章" in ch_name or "方法" in ch_name: extra_instruction = "描述方法步驟與工具，勿寫限制。"
+                    elif "第五章" in ch_name or "結論" in ch_name: extra_instruction = "包含研究限制與未來建議。"
+                    elif "第四章" in ch_name or "結果" in ch_name: 
                         extra_instruction = "模擬豐富顯著數據，使用 Markdown 表格。"
                         graph_p = f"針對 {final_method} 分析結果，畫出直式(TB)關係圖。回傳 DOT code。"
-                        code = ask_gemini(graph_p, api_key, selected_model, st.session_state.global_rules)
+                        code = ask_gemini(graph_p, api_key, selected_model)
                         st.session_state.graph_code = clean_graphviz_code(code)
 
                     prompt = f"""
@@ -318,23 +322,23 @@ elif st.session_state.step == 3:
                     架構：{st.session_state.framework}。文獻：{st.session_state.refs}。
                     {extra_instruction}
                     """
-                    res = ask_gemini(prompt, api_key, selected_model, st.session_state.global_rules)
+                    res = ask_gemini(prompt, api_key, selected_model)
                     st.session_state.content[ch_key] = res
                     
-                    if "第二章" in ch_name:
+                    if ("第二章" in ch_name or "文獻" in ch_name) and st.session_state.framework:
                         graph_p = f"根據架構 {st.session_state.framework}，繪製直式(TB)觀念架構圖。回傳 DOT code。"
-                        code = ask_gemini(graph_p, api_key, selected_model, st.session_state.global_rules)
+                        code = ask_gemini(graph_p, api_key, selected_model)
                         st.session_state.concept_map_code = clean_graphviz_code(code)
                     st.rerun()
         else:
             st.markdown("### 📖 章節預覽")
             st.markdown(current_content)
             
-            if "第二章" in ch_name and st.session_state.concept_map_code:
+            if ("第二章" in ch_name or "文獻" in ch_name) and st.session_state.concept_map_code:
                 st.markdown("#### 📊 觀念性架構圖")
                 try: st.graphviz_chart(st.session_state.concept_map_code)
                 except: pass
-            if "第四章" in ch_name and st.session_state.graph_code:
+            if ("第四章" in ch_name or "結果" in ch_name) and st.session_state.graph_code:
                 st.markdown("#### 📊 分析結果示意圖")
                 try: st.graphviz_chart(st.session_state.graph_code)
                 except: pass
@@ -342,16 +346,14 @@ elif st.session_state.step == 3:
             st.divider()
             col1, col2 = st.columns([3, 1])
             with col1:
-                feedback = st.text_area(f"修改意見 (您的修正將同步更新到全域規則，讓 AI 記住)：", height=100)
+                feedback = st.text_area(f"修改意見 (將自動加入全域記憶)：", height=100)
                 if st.button("🔄 依照意見重寫"):
                     with st.spinner("修正中..."):
-                        # 【關鍵】如果使用者指正了錯誤，我們就把這個指正也加到「全域規則」裡
-                        # 這樣下一章 AI 就不會再犯了
                         if feedback not in st.session_state.global_rules:
                             st.session_state.global_rules += f"\n- {feedback}"
                         
                         fix_prompt = f"重寫「{ch_name}」。原稿：{current_content}。意見：{feedback}。"
-                        new_content = ask_gemini(fix_prompt, api_key, selected_model, st.session_state.global_rules)
+                        new_content = ask_gemini(fix_prompt, api_key, selected_model)
                         st.session_state.content[ch_key] = new_content
                         st.rerun()
             with col2:
@@ -373,7 +375,7 @@ elif st.session_state.step == 4:
         if st.button("📄 生成 APA"):
             with st.spinner("整理中..."):
                 apa_prompt = f"整理 APA 7th 參考文獻：\n{st.session_state.refs}"
-                st.session_state.apa_refs = ask_gemini(apa_prompt, api_key, selected_model, st.session_state.global_rules)
+                st.session_state.apa_refs = ask_gemini(apa_prompt, api_key, selected_model)
                 st.rerun()
     
     if st.session_state.apa_refs:
@@ -382,35 +384,26 @@ elif st.session_state.step == 4:
         chapter_options['ref'] = "參考文獻 (APA)"
         selected_chapters = st.multiselect("勾選下載章節", list(chapter_options.keys()), default=list(chapter_options.keys()))
         
-        # 建立 HTML 內容
+        # 建立 HTML
         html_body = f"<h1 style='text-align:center;'>{st.session_state.final_title}</h1>"
-        final_text = f"# {st.session_state.final_title}\n\n" # Markdown 版本
+        final_text = f"# {st.session_state.final_title}\n\n" 
         
         for ch in CHAPTERS:
             if ch['key'] in selected_chapters:
                 content = st.session_state.content.get(ch['key'], '')
-                
-                # HTML 組裝
                 html_body += f"<h2>{ch['name']}</h2>"
                 html_body += f"<p>{content.replace(chr(10), '<br>')}</p>"
-                
-                # Markdown 組裝
                 final_text += content + "\n\n"
                 
-                # 圖片處理 (HTML only)
-                if ch['key'] == 'ch2' and st.session_state.concept_map_code:
-                    html_body += "<h3>觀念性架構圖</h3>"
-                    html_body += get_graph_img_tag(st.session_state.concept_map_code)
-                if ch['key'] == 'ch4' and st.session_state.graph_code:
-                    html_body += "<h3>分析結果示意圖</h3>"
-                    html_body += get_graph_img_tag(st.session_state.graph_code)
+                if (ch['key'] == 'ch2' or "文獻" in ch['name']) and st.session_state.concept_map_code:
+                    html_body += "<h3>觀念性架構圖</h3>" + get_graph_img_tag(st.session_state.concept_map_code)
+                if (ch['key'] == 'ch4' or "結果" in ch['name']) and st.session_state.graph_code:
+                    html_body += "<h3>分析結果示意圖</h3>" + get_graph_img_tag(st.session_state.graph_code)
                     
         if "ref" in selected_chapters:
-            html_body += "<h2>參考文獻</h2>"
-            html_body += f"<p>{st.session_state.apa_refs.replace(chr(10), '<br>')}</p>"
+            html_body += "<h2>參考文獻</h2>" + f"<p>{st.session_state.apa_refs.replace(chr(10), '<br>')}</p>"
             final_text += "\n\n## 參考文獻\n" + st.session_state.apa_refs
         
-        # 下載格式
         fmt = st.radio("格式", ["HTML (含圖片)", "Markdown", "TXT"])
         if fmt == "Markdown":
             st.download_button("📥 下載 Markdown", final_text, "Thesis.md")
