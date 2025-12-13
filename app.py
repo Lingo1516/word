@@ -1,4 +1,7 @@
-
+import streamlit as st
+from openai import OpenAI
+import time
+import os
 
 
 # --- 系統設定 ---
@@ -284,4 +287,3 @@ elif st.session_state.step == 4:
 # --- 頁尾 ---
 st.markdown("---")
 st.markdown("*專為管理科學工程博士設計 | BRICS CO2研究優化*")
-Manus
