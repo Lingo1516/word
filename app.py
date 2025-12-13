@@ -7,26 +7,23 @@ from google.api_core import exceptions
 st.set_page_config(page_title="論文寫作助手 (終極鎖定版)", layout="wide", page_icon="🔒")
 
 # ==========================================
-# 🔥🔥🔥 請在這裡填入你的 API Key 🔥🔥🔥
-# 我已經把你剛剛貼出來的格式準備好了，請確認引號內是完整的 Key
-final_fixed_key = "AIzaSyBM4Z9-cXuZRqWjBwRsErvmFmdpfc3iJ1E" 
+# 🔥🔥🔥 已更新為新API Key (2025/12/13) 🔥🔥🔥
+final_fixed_key = "AIzaSyAXQVsBivz15didMT0NqCsgxDvxgxgQgk0" 
 # ==========================================
 
-# --- 核心：暴力重試與降級機制 (Flash 優先) ---
+# --- 核心：暴力重試與降級機制 (Gemini 2.5 優先) ---
 def ask_gemini_robust(prompt, key, user_rules=""):
-    # 這裡直接用鎖定的 Key，如果沒填才報錯
     if "AIzaSy" not in key:
         return "⚠️ 請檢查程式碼第 13 行，Key 似乎沒填完整"
     
     genai.configure(api_key=key)
     
-    # 組合 Prompt
     full_prompt = prompt
     if user_rules:
         full_prompt = f"【請務必遵守以下規則】\n{user_rules}\n\n----------------\n{prompt}"
 
-    # 模型順序：先試 Flash (快)，不行就試 Pro (穩)
-    model_queue = ["gemini-1.5-flash", "gemini-pro"]
+    # 2025最新模型：先試 Flash (快)，不行就試 Pro (穩)
+    model_queue = ["gemini-2.5-flash", "gemini-2.5-pro"]
     max_retries = 3 
     
     for attempt in range(max_retries):
@@ -75,7 +72,6 @@ if 'global_rules' not in st.session_state: st.session_state.global_rules = "1. �
 with st.sidebar:
     st.header("⚙️ 引擎設定")
     
-    # 直接顯示鎖定狀態
     if "AIzaSy" in final_fixed_key:
         st.success("✅ API Key 已鎖定！")
     else:
@@ -126,7 +122,8 @@ if "AIzaSy" not in final_fixed_key:
 if st.session_state.step == 0:
     st.subheader("步驟 0：題目")
     if st.button("✨ 產生題目"):
-        if not keywords_str: st.error("請輸入關鍵字")
+        if not keywords_str: 
+            st.error("請輸入關鍵字")
         else:
             with st.spinner("連線中..."):
                 prompt = f"關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文題目。"
@@ -174,7 +171,7 @@ elif st.session_state.step == 3:
     current_content = st.session_state.content.get(selected_ch_key, "")
     
     if st.button(f"🚀 撰寫 {chapter_map[selected_ch_key]}"):
-        with st.spinner("AI 寫作中 (Flash 優先)..."):
+        with st.spinner("AI 寫作中 (Gemini 2.5 Flash 優先)..."):
             prompt = f"""
             題目：{st.session_state.final_title}
             章節：{chapter_map[selected_ch_key]}
@@ -199,5 +196,5 @@ elif st.session_state.step == 4:
     st.subheader("步驟 4：下載")
     final_text = f"# {st.session_state.final_title}\n\n"
     for ch_key, content in st.session_state.content.items():
-        final_text += f"\n\n## {ch_key}\n{content}"
+        final_text += f"\n\n## {chapter_map[ch_key]}\n{content}"
     st.download_button("下載 Markdown", final_text, "thesis.md")
