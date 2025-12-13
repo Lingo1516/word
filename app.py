@@ -2,13 +2,13 @@ import streamlit as st
 import google.generativeai as genai
 import re
 import urllib.parse
-import time  # <--- 新增這個，用來計時等待
+import time
 from google.api_core import exceptions
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (自動重試版)", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="論文寫作助手 (穩定優先版)", layout="wide", page_icon="🧠")
 
-# --- 核心 1: 智慧掃描模型 (只留最強的兩個) ---
+# --- 核心 1: 智慧掃描 (邏輯反轉：Flash 優先！) ---
 def get_best_models(api_key):
     try:
         genai.configure(api_key=api_key)
@@ -19,16 +19,19 @@ def get_best_models(api_key):
                 all_models.append(name)
         
         recommended = []
-        # 1. 找 Pro
-        pro_candidates = [m for m in all_models if 'gemini-1.5-pro' in m and 'latest' in m]
-        if not pro_candidates: pro_candidates = [m for m in all_models if 'gemini-1.5-pro' in m]
-        if pro_candidates: recommended.append(pro_candidates[0])
         
-        # 2. 找 Flash
+        # 【關鍵修改】: 優先找 Flash (速度快、額度高)，而不是 Pro
+        # 1. 找 Flash (高頻率使用首選)
         flash_candidates = [m for m in all_models if 'gemini-1.5-flash' in m and 'latest' in m]
         if not flash_candidates: flash_candidates = [m for m in all_models if 'gemini-1.5-flash' in m]
-        if flash_candidates: recommended.append(flash_candidates[0])
+        if flash_candidates: recommended.append(flash_candidates[0]) # Flash 排第一！
 
+        # 2. 找 Pro (當備用)
+        pro_candidates = [m for m in all_models if 'gemini-1.5-pro' in m and 'latest' in m]
+        if not pro_candidates: pro_candidates = [m for m in all_models if 'gemini-1.5-pro' in m]
+        if pro_candidates: recommended.append(pro_candidates[0]) # Pro 排第二
+
+        # 如果真的都沒有，才回傳全部
         return recommended if recommended else all_models
     except Exception as e:
         return []
@@ -58,7 +61,7 @@ def get_graph_img_tag(dot_code):
     <br>
     '''
 
-# --- 核心 4: 寫作函式 (加入自動重試機制) ---
+# --- 核心 4: 寫作函式 (含自動重試) ---
 def ask_gemini(prompt, api_key, model_name, user_rules=""):
     if not api_key: return "⚠️ 請設定 Key"
     
@@ -77,7 +80,7 @@ def ask_gemini(prompt, api_key, model_name, user_rules=""):
         temperature=0.7, 
     )
 
-    # --- 自動重試迴圈 (最多試 3 次) ---
+    # 自動重試機制 (Flash 其實很少觸發這個，但留著保險)
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -85,20 +88,18 @@ def ask_gemini(prompt, api_key, model_name, user_rules=""):
             return response.text
         
         except exceptions.ResourceExhausted:
-            # 如果是最後一次嘗試，還是失敗，才回傳錯誤
             if attempt == max_retries - 1:
-                return "⏳ 伺服器忙碌，已重試多次仍失敗。建議切換成 Flash 模型或稍後再試。"
+                return "⏳ 伺服器忙碌。請稍後再試。"
             
-            # 否則，等待後重試
-            wait_time = 10 * (attempt + 1) # 第一次等10秒，第二次等20秒
-            with st.spinner(f"⚠️ 觸發 Google 速度限制，系統自動等待 {wait_time} 秒後重試 ({attempt+1}/{max_retries})..."):
+            wait_time = 5 * (attempt + 1) # 縮短等待時間
+            with st.spinner(f"⚠️ 正在排隊中 (自動等待 {wait_time} 秒)..."):
                 time.sleep(wait_time)
-            continue # 重新執行 try 區塊
+            continue
             
         except exceptions.InvalidArgument:
-            return f"❌ 參數錯誤或模型不支援: {model_name}"
+            return f"❌ 參數錯誤: {model_name}"
         except Exception as e:
-            return f"❌ 發生錯誤：{str(e)}"
+            return f"❌ 錯誤：{str(e)}"
             
     return "❌ 未知錯誤"
 
@@ -129,26 +130,29 @@ with st.sidebar:
         if user_key: api_key = user_key
     
     if api_key:
+        # 自動初始化：預設 Flash 在第一個
         if not st.session_state.my_models:
-             st.session_state.my_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
+             st.session_state.my_models = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
-        if st.button("🔄 檢查連線 & 更新模型"):
-             with st.spinner("正在尋找最佳模型..."):
+        if st.button("🔄 重置連線 (Flash 優先)"):
+             with st.spinner("切換至穩定線路..."):
                 found = get_best_models(api_key)
                 if found: 
                     st.session_state.my_models = found
-                    st.success(f"已鎖定 {len(found)} 個最佳模型！")
+                    st.success(f"已切換！目前優先使用: {found[0]}")
                 else: 
                     st.error("連線失敗")
 
-    model_options = st.session_state.my_models if st.session_state.my_models else ["gemini-1.5-pro", "gemini-1.5-flash"]
+    model_options = st.session_state.my_models if st.session_state.my_models else ["gemini-1.5-flash", "gemini-1.5-pro"]
+    
     st.markdown("### 🤖 選擇模型")
+    # 這裡 index=0 絕對是 Flash
     selected_model = st.selectbox("目前使用：", model_options, index=0)
     
-    if "pro" in selected_model:
-        st.info("✅ **已選擇 Pro**：邏輯最強，適合寫論文內文。(若卡住會自動重試)")
-    elif "flash" in selected_model:
-        st.info("⚡ **已選擇 Flash**：速度最快，幾乎不會卡頓。")
+    if "flash" in selected_model:
+        st.success("⚡ **Flash (推薦)**：穩定、快速、不易塞車。")
+    elif "pro" in selected_model:
+        st.warning("🧠 **Pro**：較聰明但容易出現「配額不足」，需等待。")
     
     st.divider()
     st.header("🧠 2. 記憶與規則")
@@ -205,7 +209,7 @@ with st.sidebar:
         num_crits = st.number_input("準則數量(每構面)", 2, 10, 4)
 
 # --- 主畫面 ---
-st.title("🧠 論文寫作助手 (自動重試版)")
+st.title("🧠 論文寫作助手 (穩定優先版)")
 
 if not api_key: st.warning("⬅️ 請先在側邊欄輸入 API Key"); st.stop()
 
@@ -321,7 +325,7 @@ elif st.session_state.step == 3:
         
         if not current_content:
             if st.button(f"🚀 開始撰寫 {ch_name}"):
-                with st.spinner(f"AI 正在撰寫... (若遇速度限制將自動重試)"):
+                with st.spinner(f"AI 正在撰寫... (模式: Flash 穩定版)"):
                     extra_instruction = ""
                     if "第一章" in ch_name or "前言" in ch_name: extra_instruction = "請明確界定研究範圍與限制。"
                     elif "第二章" in ch_name or "文獻" in ch_name: extra_instruction = "引用真實文獻，歸納觀念性架構。"
