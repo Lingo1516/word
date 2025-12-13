@@ -4,26 +4,28 @@ import time
 from google.api_core import exceptions
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (終極鎖定版)", layout="wide", page_icon="🔒")
+st.set_page_config(page_title="論文寫作助手 (完整功能版)", layout="wide", page_icon="🎓")
 
 # ==========================================
-# 🔥🔥🔥 已更新為新API Key (2025/12/13) 🔥🔥🔥
-final_fixed_key = "AIzaSyAXQVsBivz15didMT0NqCsgxDvxgxgQgk0" 
+# 🔥🔥🔥 API Key 鎖定區 🔥🔥🔥
+# 既然你環境都修好了，這裡我幫你填好，直接跑！
+final_fixed_key = "AIzaSyBM4Z9-cXuZRqWjBwRsErvmFmdpfc3iJ1E" 
 # ==========================================
 
-# --- 核心：暴力重試與降級機制 (Gemini 2.5 優先) ---
+# --- 核心：暴力重試與降級機制 (Flash 優先) ---
 def ask_gemini_robust(prompt, key, user_rules=""):
     if "AIzaSy" not in key:
-        return "⚠️ 請檢查程式碼第 13 行，Key 似乎沒填完整"
+        return "⚠️ 請檢查程式碼第 12 行，Key 似乎沒填完整"
     
     genai.configure(api_key=key)
     
+    # 組合 Prompt
     full_prompt = prompt
     if user_rules:
         full_prompt = f"【請務必遵守以下規則】\n{user_rules}\n\n----------------\n{prompt}"
 
-    # 2025最新模型：先試 Flash (快)，不行就試 Pro (穩)
-    model_queue = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    # 模型順序：先試 Flash (快)，不行就試 Pro (穩)
+    model_queue = ["gemini-1.5-flash", "gemini-pro"]
     max_retries = 3 
     
     for attempt in range(max_retries):
@@ -72,10 +74,11 @@ if 'global_rules' not in st.session_state: st.session_state.global_rules = "1. �
 with st.sidebar:
     st.header("⚙️ 引擎設定")
     
+    # 檢查 Key
     if "AIzaSy" in final_fixed_key:
         st.success("✅ API Key 已鎖定！")
     else:
-        st.error("❌ 程式碼第 13 行的 Key 不正確")
+        st.error("❌ Key 設定有誤")
 
     st.divider()
     user_rules = st.text_area("寫作規則：", value=st.session_state.global_rules, height=100)
@@ -101,29 +104,44 @@ with st.sidebar:
             {"key": "ch5", "name": "5. 討論", "prompt": "結論"}
         ]
 
+    st.divider()
+    # 【這裡！關鍵字選單加回來了】
     st.markdown("#### 關鍵字")
-    keywords_str = st.text_input("輸入關鍵字 (例如: ESG, 策略管理)")
+    business_keywords = ["策略管理", "競爭優勢", "ESG", "永續發展", "消費者行為", "滿意度", "人力資源", "供應鏈管理", "金融科技", "AI應用", "教育訓練", "組織承諾"]
+    selected_kws = st.multiselect("勾選：", business_keywords)
+    custom_kw = st.text_input("自訂補充：")
     
+    # 組合關鍵字
+    final_kws = selected_kws.copy()
+    if custom_kw: final_kws.append(custom_kw)
+    keywords_str = ", ".join(final_kws)
+
     st.divider()
     method_category = st.selectbox("方法分類", ["MCDM (多準則)", "量化 (問卷)", "質性 (訪談)"])
     final_method = method_category
+    
     if "MCDM" in method_category:
-        mcdm_tool = st.selectbox("MCDM 工具", ["AHP", "Delphi", "FCM", "TOPSIS"])
-        final_method = f"MCDM ({mcdm_tool})"
+        st.markdown("#### ☑️ MCDM 工具")
+        # 這裡包含你要的 FCM
+        mcdm_tools = st.multiselect(
+            "選擇方法：", 
+            ["Delphi", "Fuzzy Delphi", "AHP", "Fuzzy AHP", "ANP", "DEMATEL", "DANP", "FCM", "TOPSIS", "VIKOR"],
+            default=["Delphi", "AHP"]
+        )
+        final_method = f"MCDM ({' + '.join(mcdm_tools)})" if mcdm_tools else "MCDM"
 
 # --- 主畫面 ---
-st.title("🔒 論文寫作助手 (終極鎖定版)")
+st.title("🎓 論文寫作助手 (完整功能版)")
 
 if "AIzaSy" not in final_fixed_key:
-    st.error("請把你的 Key 填入程式碼第 13 行！")
+    st.error("請檢查 Key 設定")
     st.stop()
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
     st.subheader("步驟 0：題目")
     if st.button("✨ 產生題目"):
-        if not keywords_str: 
-            st.error("請輸入關鍵字")
+        if not keywords_str: st.error("請勾選或輸入關鍵字")
         else:
             with st.spinner("連線中..."):
                 prompt = f"關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文題目。"
@@ -171,7 +189,7 @@ elif st.session_state.step == 3:
     current_content = st.session_state.content.get(selected_ch_key, "")
     
     if st.button(f"🚀 撰寫 {chapter_map[selected_ch_key]}"):
-        with st.spinner("AI 寫作中 (Gemini 2.5 Flash 優先)..."):
+        with st.spinner("AI 寫作中 (Flash 優先)..."):
             prompt = f"""
             題目：{st.session_state.final_title}
             章節：{chapter_map[selected_ch_key]}
@@ -196,5 +214,5 @@ elif st.session_state.step == 4:
     st.subheader("步驟 4：下載")
     final_text = f"# {st.session_state.final_title}\n\n"
     for ch_key, content in st.session_state.content.items():
-        final_text += f"\n\n## {chapter_map[ch_key]}\n{content}"
+        final_text += f"\n\n## {ch_key}\n{content}"
     st.download_button("下載 Markdown", final_text, "thesis.md")
