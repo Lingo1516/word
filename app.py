@@ -3,34 +3,44 @@ from groq import Groq
 import time
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (Groq Llama 3.3版)", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="論文寫作助手 (深度模擬版)", layout="wide", page_icon="📊")
 
 # ==========================================
-# ⚡⚡⚡ 你的 Groq Key (已鎖定) ⚡⚡⚡
+# ⚡⚡⚡ Groq Key (已鎖定) ⚡⚡⚡
 FIXED_KEY = "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"
 # ==========================================
 
-# --- 核心：Groq 引擎 (升級至 Llama 3.3) ---
-def ask_groq_fast(prompt, user_rules=""):
+# --- 核心：Groq 引擎 (Llama 3.3) ---
+def ask_groq_simulation(prompt, chapter_type, method_name, user_rules=""):
     # 設定 Client
     client = Groq(api_key=FIXED_KEY)
 
-    # 組合 Prompt
-    system_msg = "你是一位管理科學與工程領域的頂尖研究員。請務必使用『繁體中文』回答。寫作風格需專業、學術、邏輯嚴謹。"
+    # 針對不同章節的「強制指令」
+    system_instruction = f"""
+    你是一位管理科學與工程領域的教授。
+    當前任務：撰寫博士論文的「{chapter_type}」。
+    研究方法：{method_name}。
+    
+    【最高指導原則】：
+    1. 使用繁體中文。
+    2. **嚴禁使用「[請在此插入數據]」之類的佔位符。**
+    3. **必須「模擬」出一套真實、合理的數據與情境。**
+    4. 如果是第四章，請務必生成 Markdown 表格來展示分析結果（如：迴歸表、權重表、矩陣）。
+    5. 如果是第三章，請列出該方法論的數學公式或運算步驟。
+    """
+
     if user_rules:
-        system_msg += f"\n【請嚴格遵守規則】：{user_rules}"
+        system_instruction += f"\n【使用者額外規則】：{user_rules}"
 
     try:
-        # 發送請求
-        # ⚠️ 關鍵修正：換成最新的 llama-3.3-70b-versatile
         chat_completion = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": system_msg},
+                {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt}
             ],
             model="llama-3.3-70b-versatile", 
             temperature=0.6, 
-            max_tokens=4096,
+            max_tokens=6000, # 開大一點讓它寫數據
         )
         return chat_completion.choices[0].message.content
 
@@ -46,10 +56,10 @@ if 'content' not in st.session_state: st.session_state.content = {}
 if 'global_rules' not in st.session_state: 
     st.session_state.global_rules = "1. 必須使用繁體中文\n2. 格式符合APA第7版\n3. 內容具體，拒絕空泛"
 
-# --- 側邊欄 (完整功能) ---
+# --- 側邊欄 (維持您要的原有架構) ---
 with st.sidebar:
-    st.header("⚡ 引擎：Llama 3.3 (最新)")
-    st.success("✅ 已修復模型版本")
+    st.header("⚡ 論文設定")
+    st.success("✅ 引擎：Llama 3.3 (數據模擬模式)")
     
     st.divider()
 
@@ -70,7 +80,7 @@ with st.sidebar:
 
     st.divider()
 
-    # 2. 研究方法 (包含 FCM)
+    # 2. 研究方法 (維持完整選單)
     st.subheader("📊 研究方法")
     method_category = st.selectbox("方法分類", 
         ["MCDM (多準則決策)", "量化研究 (問卷/統計)", "質性研究 (訪談/個案)", "混合研究"]
@@ -113,7 +123,7 @@ with st.sidebar:
     st.session_state.global_rules = rules
 
 # --- 主畫面 ---
-st.title("⚡ 論文寫作助手 (Groq Llama 3.3版)")
+st.title("📊 論文寫作助手 (深度數據模擬版)")
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -122,16 +132,25 @@ if st.session_state.step == 0:
         if not keywords_str:
             st.error("請在側邊欄選擇或輸入關鍵字")
         else:
-            with st.spinner("Llama 3.3 思考中..."):
-                prompt = f"領域：管理科學與工程。關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文博士論文題目，並附帶簡短設計理念。"
-                st.session_state.generated_titles = ask_groq_fast(prompt, st.session_state.global_rules)
+            with st.spinner("AI 正在構思研究設計..."):
+                prompt = f"""
+                領域：管理科學與工程。
+                關鍵字：{keywords_str}。
+                研究方法：{final_method}。
+                
+                請產生 3 個繁體中文博士論文題目。
+                要求：題目需反映出方法的應用（例如：基於 FCM 之...研究）。
+                每個題目下方請附上 1 行簡短設計理念。
+                """
+                # 這裡 chapter_type 填 "題目發想"
+                st.session_state.generated_titles = ask_groq_simulation(prompt, "題目發想", final_method, st.session_state.global_rules)
     
     if 'generated_titles' in st.session_state:
         st.info("💡 參考題目：")
         st.markdown(st.session_state.generated_titles)
 
     st.markdown("---")
-    title_input = st.text_input("👇 輸入最終題目 (或從上面複製貼上)", value=st.session_state.final_title)
+    title_input = st.text_input("👇 輸入最終題目", value=st.session_state.final_title)
     if st.button("✅ 鎖定題目，下一步"):
         if title_input:
             st.session_state.final_title = title_input
@@ -144,7 +163,7 @@ if st.session_state.step == 0:
 elif st.session_state.step == 1:
     st.header("步驟 2：導入文獻")
     st.markdown(f"> **當前題目**：{st.session_state.final_title}")
-    st.session_state.refs = st.text_area("請貼上文獻列表", value=st.session_state.refs, height=200)
+    st.session_state.refs = st.text_area("請貼上文獻列表 (這將決定公式與模型的理論基礎)：", value=st.session_state.refs, height=200)
     
     col1, col2 = st.columns([1,1])
     with col1:
@@ -159,10 +178,19 @@ elif st.session_state.step == 1:
 # === 步驟 2: 大綱 ===
 elif st.session_state.step == 2:
     st.header("步驟 3：生成大綱")
-    if st.button("✨ 秒速生成大綱", type="primary"):
-        with st.spinner("規劃中..."):
-            prompt = f"題目：{st.session_state.final_title}\n方法：{final_method}\n文獻：{st.session_state.refs[:1500]}\n請撰寫詳細大綱。"
-            st.session_state.outline = ask_groq_fast(prompt, st.session_state.global_rules)
+    if st.button("✨ 生成架構與大綱", type="primary"):
+        with st.spinner("正在規劃研究邏輯..."):
+            prompt = f"""
+            題目：{st.session_state.final_title}
+            研究方法：{final_method}
+            文獻：{st.session_state.refs[:1500]}
+            
+            請撰寫詳細大綱。
+            特別要求：
+            1. 第三章必須明確列出會用到的公式或模型步驟。
+            2. 第四章必須規劃要展示哪些數據表格。
+            """
+            st.session_state.outline = ask_groq_simulation(prompt, "大綱規劃", final_method, st.session_state.global_rules)
             st.rerun()
             
     if st.session_state.outline:
@@ -178,29 +206,47 @@ elif st.session_state.step == 2:
                 st.session_state.step = 3
                 st.rerun()
 
-# === 步驟 3: 寫作 ===
+# === 步驟 3: 寫作 (核心修改處) ===
 elif st.session_state.step == 3:
-    st.header("步驟 4：逐章寫作")
+    st.header("步驟 4：逐章寫作 (含數據模擬)")
     
     chapter_map = {ch['key']: ch['name'] for ch in CHAPTERS}
     selected_ch = st.selectbox("選擇章節", list(chapter_map.keys()), format_func=lambda x: chapter_map[x])
     
+    # 根據章節動態調整提示詞
+    if "ch3" in selected_ch or "方法" in chapter_map[selected_ch]:
+        extra_hint = "【重點】：請詳細列出本研究使用的數學公式、變數定義、模型建構步驟。如果是 MCDM，請列出矩陣計算公式；如果是量化，請列出迴歸方程式。"
+    elif "ch4" in selected_ch or "結果" in chapter_map[selected_ch]:
+        extra_hint = f"【重點】：請務必「模擬」出一套漂亮的數據結果。請使用 Markdown 表格展示分析結果（例如：{final_method} 的運算結果、權重表、相關係數表）。數據必須顯著且符合邏輯，不要留空。"
+    elif "ch5" in selected_ch or "結論" in chapter_map[selected_ch]:
+        extra_hint = "【重點】：請根據第四章模擬出來的數據結果，進行深入討論與管理意涵的闡述。"
+    else:
+        extra_hint = "【重點】：請引用文獻進行論述。"
+
     if st.button(f"🚀 撰寫 {chapter_map[selected_ch]}", type="primary"):
-        with st.spinner("極速寫作中..."):
+        with st.spinner("AI 正在運算與寫作 (Llama 3.3)..."):
             prompt = f"""
             題目：{st.session_state.final_title}
             章節：{chapter_map[selected_ch]}
             大綱：{st.session_state.outline}
             文獻：{st.session_state.refs[:2500]}
-            方法：{final_method}
             
-            請撰寫本章節內容，字數約 1500 字，學術語氣。
-            請直接輸出內容。
+            {extra_hint}
+            
+            請撰寫本章節內容，字數約 2000 字，學術語氣。
             """
-            st.session_state.content[selected_ch] = ask_groq_fast(prompt, st.session_state.global_rules)
+            # 呼叫新的 simulation 函數
+            st.session_state.content[selected_ch] = ask_groq_simulation(
+                prompt, 
+                chapter_map[selected_ch], 
+                final_method, 
+                st.session_state.global_rules
+            )
             st.rerun()
             
+    # 顯示內容
     if selected_ch in st.session_state.content:
+        st.markdown(f"### 📄 {chapter_map[selected_ch]} 預覽")
         st.markdown(st.session_state.content[selected_ch])
         
     st.markdown("---")
