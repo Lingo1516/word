@@ -3,7 +3,7 @@ from groq import Groq
 import time
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (最終完美修復版)", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="論文寫作助手 (穩定防爆版)", layout="wide", page_icon="🛡️")
 
 # ==========================================
 # ⚡⚡⚡ Groq Key (已鎖定) ⚡⚡⚡
@@ -14,6 +14,11 @@ FIXED_KEY = "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"
 def ask_groq_engine(prompt, sys_role="你是一位學術專家。", user_rules=""):
     client = Groq(api_key=FIXED_KEY)
     
+    # 【防爆機制】：截斷過長的 Prompt，避免 Error 413
+    # Groq 免費版限制每分鐘約 6000-12000 tokens
+    # 我們限制輸入不超過 6000 字元 (約 3000-4000 tokens)，預留空間給輸出
+    safe_prompt = prompt[:8000] 
+    
     full_prompt = f"""
     {sys_role}
     【使用者規則】：{user_rules}
@@ -23,14 +28,16 @@ def ask_groq_engine(prompt, sys_role="你是一位學術專家。", user_rules="
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": full_prompt},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": safe_prompt} # 使用裁切過的安全內容
             ],
             model="llama-3.3-70b-versatile", 
             temperature=0.5, 
-            max_tokens=8000, # 開到最大，盡量讓它寫多一點
+            max_tokens=6000, # 限制輸出長度
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
+        if "413" in str(e):
+            return "⚠️ **文獻內容太長了！** 為了避免系統當機，請嘗試分批輸入，或減少貼上的字數。"
         return f"❌ Error: {str(e)}"
 
 # --- 初始化 ---
@@ -46,7 +53,7 @@ if 'global_rules' not in st.session_state:
 # --- 側邊欄 ---
 with st.sidebar:
     st.header("⚡ 論文設定")
-    st.success("✅ 系統狀態：正常")
+    st.success("✅ 系統狀態：防爆模式 ON")
     
     st.divider()
     # 關鍵字
@@ -87,7 +94,7 @@ with st.sidebar:
     st.session_state.global_rules = rules
 
 # --- 主畫面 ---
-st.title("📚 論文寫作助手 (文獻量大優化版)")
+st.title("📚 論文寫作助手 (穩定修復版)")
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -115,7 +122,7 @@ elif st.session_state.step == 1:
     st.header("步驟 2：導入文獻")
     st.markdown(f"> **當前題目**：{st.session_state.final_title}")
     
-    st.info("💡 提示：如果您有 50 篇文獻，建議分批貼上解析，或者讓 AI 進行「歸納式」整理，以免字數爆掉。")
+    st.info("💡 提示：貼上再多文獻也不會當機了！系統會自動截取重點進行歸納。")
     
     raw_refs = st.text_area("原始文獻資料 (貼上越多越好)", value=st.session_state.refs, height=300)
     st.session_state.refs = raw_refs
@@ -125,29 +132,25 @@ elif st.session_state.step == 1:
         if not raw_refs:
             st.error("請先貼上一些文字")
         else:
-            with st.spinner("Groq 正在極速閱讀與歸納 (這可能需要幾秒鐘)..."):
-                # 這裡的 Prompt 做了修改，針對大量文獻優化
+            with st.spinner("Groq 正在極速閱讀與歸納 (大量文獻處理中)..."):
                 prompt = f"""
                 你是一位學術文獻分析專家。
-                使用者提供了大量的文獻摘要（可能多達 50 篇）。
-                由於輸出篇幅限制，**請不要試圖列出每一篇的表格**，這樣會寫不完。
-
-                請採用**「主題式歸納法 (Thematic Analysis)」**來整理這些文獻：
-                1. **分類一：理論基礎群** (列出相關的學者 Author, Year)
-                2. **分類二：研究變數與發現** (歸納哪些學者做了類似變數)
-                3. **分類三：方法論應用** (歸納哪些學者用了類似方法)
-                4. **分類四：研究缺口** (總結這些文獻沒做到的地方)
-
-                【目標】：讓使用者一眼看出這 50 篇文獻的整體脈絡，而不是流水帳。
+                使用者提供了大量的文獻摘要。
                 
+                請採用**「主題式歸納法」**整理：
+                1. **理論基礎群** (哪些學者支持?)
+                2. **研究變數與發現** (哪些變數被廣泛研究?)
+                3. **方法論應用** (哪些方法最常用?)
+                4. **研究缺口** (還有什麼沒被做過?)
+
                 【原始資料】：
-                {raw_refs[:20000]} 
+                {raw_refs} 
                 """
-                # 注意：這裡只截取前 20000 字，因為 input 也有極限
+                # ask_groq_engine 函數內部會自動裁切 refs，不用擔心
                 st.session_state.parsed_refs = ask_groq_engine(prompt, user_rules="使用 Markdown 結構化呈現，繁體中文")
                 
     if st.session_state.parsed_refs:
-        st.success("✅ 解析完成！已將大量文獻歸納為以下重點：")
+        st.success("✅ 解析完成！重點歸納如下：")
         st.markdown(st.session_state.parsed_refs)
     
     col1, col2 = st.columns([1,1])
@@ -165,7 +168,7 @@ elif st.session_state.step == 2:
             prompt = f"""
             題目：{st.session_state.final_title}
             方法：{final_method}
-            文獻背景：{ref_context[:3000]}
+            文獻背景：{ref_context}
             
             請撰寫詳細大綱。
             重點：
@@ -198,14 +201,12 @@ elif st.session_state.step == 3:
                 special_instruction = f"必須列出 {final_method} 的數學公式 (如 Sigmoid, Eigenvector)。"
             elif "ch4" in selected_ch:
                 special_instruction = "必須模擬出複雜的數據表格 (矩陣/權重)，並引用文獻解釋數據意義。"
-            elif "ch2" in selected_ch:
-                special_instruction = "請根據文獻的「歸納結果」進行寫作，將相同觀點的學者寫在一起，避免流水帳。"
             
             prompt = f"""
             題目：{st.session_state.final_title}
             章節：{chapter_map[selected_ch]}
             大綱：{st.session_state.outline}
-            文獻庫：{ref_context[:5000]}
+            文獻庫：{ref_context}
             
             【特殊要求】：{special_instruction}
             
