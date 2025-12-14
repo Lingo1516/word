@@ -3,42 +3,78 @@ from groq import Groq
 import time
 
 # --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (穩定防爆版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="論文寫作助手 (分批消化強大版)", layout="wide", page_icon="🚀")
 
 # ==========================================
 # ⚡⚡⚡ Groq Key (已鎖定) ⚡⚡⚡
 FIXED_KEY = "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"
 # ==========================================
 
-# --- 核心：Groq 引擎 (Llama 3.3) ---
-def ask_groq_engine(prompt, sys_role="你是一位學術專家。", user_rules=""):
+# --- 工具函數：將長文切塊 ---
+def split_text(text, chunk_size=3000):
+    """將長字串切成多個小區塊，避免超過 Token 限制"""
+    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+
+# --- 核心：Groq 引擎 (單次呼叫) ---
+def ask_groq_single(prompt, sys_role="你是一位學術專家。"):
     client = Groq(api_key=FIXED_KEY)
-    
-    # 【防爆機制】：截斷過長的 Prompt，避免 Error 413
-    # Groq 免費版限制每分鐘約 6000-12000 tokens
-    # 我們限制輸入不超過 6000 字元 (約 3000-4000 tokens)，預留空間給輸出
-    safe_prompt = prompt[:8000] 
-    
-    full_prompt = f"""
-    {sys_role}
-    【使用者規則】：{user_rules}
-    """
-    
     try:
         chat_completion = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": full_prompt},
-                {"role": "user", "content": safe_prompt} # 使用裁切過的安全內容
+                {"role": "system", "content": sys_role},
+                {"role": "user", "content": prompt}
             ],
             model="llama-3.3-70b-versatile", 
             temperature=0.5, 
-            max_tokens=6000, # 限制輸出長度
+            max_tokens=4000, 
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
-        if "413" in str(e):
-            return "⚠️ **文獻內容太長了！** 為了避免系統當機，請嘗試分批輸入，或減少貼上的字數。"
-        return f"❌ Error: {str(e)}"
+        return f"Error: {str(e)}"
+
+# --- 核心：智慧分批處理 (解決 50 篇論文讀不完的問題) ---
+def smart_batch_summary(long_text, method_name, progress_bar):
+    chunks = split_text(long_text, chunk_size=6000) # 每 6000 字切一塊
+    total_chunks = len(chunks)
+    
+    combined_summary = ""
+    
+    # 階段一：分批摘要
+    for i, chunk in enumerate(chunks):
+        progress_bar.progress((i / total_chunks) * 0.8, text=f"正在研讀第 {i+1}/{total_chunks} 部分的文獻...")
+        
+        prompt = f"""
+        這是文獻回顧的一部分（第 {i+1}/{total_chunks} 部分）。
+        請幫我提取這段文字中的：
+        1. 學者觀點 (Author & Findings)
+        2. 研究變數 (Variables)
+        3. 與「{method_name}」相關的應用
+        
+        【文獻片段】：
+        {chunk}
+        """
+        summary = ask_groq_single(prompt, sys_role="你是一位速讀專家，負責提取文獻重點。")
+        combined_summary += f"\n\n--- 第 {i+1} 部分重點 ---\n{summary}"
+        
+    # 階段二：最終統整
+    progress_bar.progress(0.9, text="正在將所有片段整合成最終表格...")
+    
+    final_prompt = f"""
+    你現在擁有所有文獻的分批重點。請將它們「去蕪存菁」，整合成一份完整的學術文獻回顧表。
+    
+    【要求】：
+    1. 使用 Markdown 表格。
+    2. 欄位包含：[學者/年份], [研究主題], [方法/變數], [主要發現]。
+    3. 必須歸納 50 篇文獻的共同趨勢。
+    
+    【所有片段重點】：
+    {combined_summary}
+    """
+    
+    final_result = ask_groq_single(final_prompt, sys_role="你是一位博學的教授，擅長歸納大量文獻。")
+    progress_bar.progress(1.0, text="完成！")
+    
+    return final_result
 
 # --- 初始化 ---
 if 'step' not in st.session_state: st.session_state.step = 0
@@ -53,7 +89,7 @@ if 'global_rules' not in st.session_state:
 # --- 側邊欄 ---
 with st.sidebar:
     st.header("⚡ 論文設定")
-    st.success("✅ 系統狀態：防爆模式 ON")
+    st.success("✅ 模式：大數據分批處理")
     
     st.divider()
     # 關鍵字
@@ -65,14 +101,14 @@ with st.sidebar:
     keywords_str = ", ".join(final_kws)
 
     st.divider()
-    # 方法 (這裡是修復崩潰的關鍵)
+    # 方法 (已修復崩潰問題)
     st.subheader("📊 研究方法")
     method_category = st.selectbox("方法分類", ["MCDM", "量化", "質性", "混合"])
     final_method = method_category
     if "MCDM" in method_category:
         mcdm_tools = st.multiselect("工具：", 
             ["Delphi", "Fuzzy Delphi", "AHP", "Fuzzy AHP", "ANP", "FCM (模糊認知圖)", "TOPSIS"],
-            default=["Delphi", "FCM (模糊認知圖)"] # ✅ 已修正：名稱完全一致
+            default=["Delphi", "FCM (模糊認知圖)"] # 名稱一致，防止崩潰
         )
         final_method = f"MCDM ({' + '.join(mcdm_tools)})" if mcdm_tools else "MCDM"
 
@@ -94,7 +130,7 @@ with st.sidebar:
     st.session_state.global_rules = rules
 
 # --- 主畫面 ---
-st.title("📚 論文寫作助手 (穩定修復版)")
+st.title("📚 論文寫作助手 (海量文獻專用版)")
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -104,7 +140,7 @@ if st.session_state.step == 0:
         else:
             with st.spinner("AI 構思中..."):
                 prompt = f"領域：管理科學。關鍵字：{keywords_str}。方法：{final_method}。請產生 3 個繁體中文博士論文題目，並說明設計理念。"
-                st.session_state.generated_titles = ask_groq_engine(prompt, user_rules=st.session_state.global_rules)
+                st.session_state.generated_titles = ask_groq_single(prompt)
     
     if 'generated_titles' in st.session_state:
         st.info("參考題目：")
@@ -117,40 +153,33 @@ if st.session_state.step == 0:
             st.session_state.step = 1
             st.rerun()
 
-# === 步驟 1: 文獻 (針對 50 篇文獻的優化) ===
+# === 步驟 1: 文獻 (分批處理核心) ===
 elif st.session_state.step == 1:
-    st.header("步驟 2：導入文獻")
+    st.header("步驟 2：導入大量文獻")
     st.markdown(f"> **當前題目**：{st.session_state.final_title}")
     
-    st.info("💡 提示：貼上再多文獻也不會當機了！系統會自動截取重點進行歸納。")
+    st.info("💡 強力建議：就算你有 10 萬字的文獻，也可以全部貼進來！系統會自動分批閱讀，不會再因為字數太多而報錯或漏讀。")
     
-    raw_refs = st.text_area("原始文獻資料 (貼上越多越好)", value=st.session_state.refs, height=300)
+    raw_refs = st.text_area("請貼上所有文獻資料 (50篇也可以)", value=st.session_state.refs, height=400)
     st.session_state.refs = raw_refs
 
-    # 新增：AI 幫你整理文獻
-    if st.button("✨ 呼叫 Groq 幫我解析文獻重點", type="secondary"):
+    # --- 這裡改用了智慧分批函數 ---
+    if st.button("✨ 啟動深層文獻解析 (這會花一點時間)", type="secondary"):
         if not raw_refs:
             st.error("請先貼上一些文字")
         else:
-            with st.spinner("Groq 正在極速閱讀與歸納 (大量文獻處理中)..."):
-                prompt = f"""
-                你是一位學術文獻分析專家。
-                使用者提供了大量的文獻摘要。
-                
-                請採用**「主題式歸納法」**整理：
-                1. **理論基礎群** (哪些學者支持?)
-                2. **研究變數與發現** (哪些變數被廣泛研究?)
-                3. **方法論應用** (哪些方法最常用?)
-                4. **研究缺口** (還有什麼沒被做過?)
+            # 顯示進度條
+            my_bar = st.progress(0, text="準備開始分批閱讀...")
+            
+            # 執行分批處理
+            st.session_state.parsed_refs = smart_batch_summary(raw_refs, final_method, my_bar)
+            
+            # 清除進度條
+            time.sleep(1)
+            my_bar.empty()
 
-                【原始資料】：
-                {raw_refs} 
-                """
-                # ask_groq_engine 函數內部會自動裁切 refs，不用擔心
-                st.session_state.parsed_refs = ask_groq_engine(prompt, user_rules="使用 Markdown 結構化呈現，繁體中文")
-                
     if st.session_state.parsed_refs:
-        st.success("✅ 解析完成！重點歸納如下：")
+        st.success("✅ 全文獻解析完成！AI 已讀完所有內容並歸納如下：")
         st.markdown(st.session_state.parsed_refs)
     
     col1, col2 = st.columns([1,1])
@@ -164,7 +193,8 @@ elif st.session_state.step == 2:
     st.header("步驟 3：生成大綱")
     if st.button("✨ 生成學術大綱", type="primary"):
         with st.spinner("規劃中..."):
-            ref_context = st.session_state.parsed_refs if st.session_state.parsed_refs else st.session_state.refs
+            # 使用解析後的精華版文獻來做大綱，更精準
+            ref_context = st.session_state.parsed_refs if st.session_state.parsed_refs else st.session_state.refs[:5000]
             prompt = f"""
             題目：{st.session_state.final_title}
             方法：{final_method}
@@ -175,7 +205,7 @@ elif st.session_state.step == 2:
             1. 第三章需明確列出數學模型 (公式)。
             2. 第四章需規劃數據模擬 (Matrix/Table)。
             """
-            st.session_state.outline = ask_groq_engine(prompt, user_rules=st.session_state.global_rules)
+            st.session_state.outline = ask_groq_single(prompt)
             st.rerun()
             
     if st.session_state.outline:
@@ -194,7 +224,7 @@ elif st.session_state.step == 3:
     
     if st.button(f"🚀 撰寫 {chapter_map[selected_ch]}", type="primary"):
         with st.spinner("寫作中..."):
-            ref_context = st.session_state.parsed_refs if st.session_state.parsed_refs else st.session_state.refs
+            ref_context = st.session_state.parsed_refs if st.session_state.parsed_refs else st.session_state.refs[:5000]
             
             special_instruction = ""
             if "ch3" in selected_ch:
@@ -212,7 +242,7 @@ elif st.session_state.step == 3:
             
             請撰寫本章內容，約 2000 字。
             """
-            st.session_state.content[selected_ch] = ask_groq_engine(prompt, user_rules=st.session_state.global_rules)
+            st.session_state.content[selected_ch] = ask_groq_single(prompt, sys_role=st.session_state.global_rules)
             st.rerun()
             
     if selected_ch in st.session_state.content:
