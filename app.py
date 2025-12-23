@@ -9,10 +9,10 @@ import string
 import pandas as pd
 from io import BytesIO
 
-# --- 系統設定 ---
-st.set_page_config(page_title="論文寫作助手 (旗艦雙核心版)", layout="wide", page_icon="🎓")
+# --- 1. 系統基礎設定 ---
+st.set_page_config(page_title="論文寫作助手 (旗艦修復版)", layout="wide", page_icon="🎓")
 
-# --- 側邊欄：引擎與方法設定 ---
+# --- 2. 側邊欄：引擎與方法設定 ---
 with st.sidebar:
     st.header("⚙️ 核心設定")
     
@@ -72,15 +72,9 @@ def call_ai_api(prompt, sys_role="你是一位學術專家。"):
     except Exception as e: return f"❌ Error: {str(e)}"
 
 # --- 函數 B: 深度模擬 (強制回傳 JSON) ---
-# 這裡我們使用 requests 直接呼叫 Gemini (或 Groq JSON mode) 以確保格式準確
 def run_simulation_analysis(text, key, mode, m_method, c_method, c_n, d_n):
-    # 為了確保數學模擬的邏輯性，這裡建議優先使用 Google 模型，若無則嘗試 Groq
-    # 這裡示範使用 requests 呼叫 Google API (因其 JSON 遵循能力較好)
-    # 如果使用者只給 Groq Key，則用 Groq 嘗試
     
     prompt = ""
-    # ... (這裡放入我們之前寫好的超強 Prompt 邏輯) ...
-    # 為了節省篇幅，我將 Prompt 簡化並整合進去
     
     if mode == "MCDM (量化/決策)":
         method_instr = ""
@@ -93,7 +87,7 @@ def run_simulation_analysis(text, key, mode, m_method, c_method, c_n, d_n):
         你是一個 MCDM 專家。方法：{m_method}。
         請根據文獻執行：收斂({c_n}準則) -> 層級({d_n}構面) -> 數據模擬。
         
-        【輸出 JSON 格式】：
+        【嚴格輸出 JSON 格式，不要包含 Markdown ```json 標記】：
         {{
             "final_hierarchy": [ {{ "dimension_name": "...", "contained_criteria": [ {{ "criteria_name": "...", "reasoning": "..." }} ] }} ],
             "step4_simulation": {{
@@ -110,7 +104,7 @@ def run_simulation_analysis(text, key, mode, m_method, c_method, c_n, d_n):
         prompt = f"""
         你是一個質性研究專家。流派：{c_method}。
         請根據文獻規劃個案研究架構。
-        【輸出 JSON 格式】：
+        【嚴格輸出 JSON 格式，不要包含 Markdown ```json 標記】：
         {{
             "case_study_content": {{
                 "intro": "方法論說明...",
@@ -121,16 +115,24 @@ def run_simulation_analysis(text, key, mode, m_method, c_method, c_n, d_n):
         文獻摘要：{text[:10000]}
         """
 
-    # 呼叫 API (根據選擇的引擎)
+    # 呼叫 API
     try:
-        res_text = call_ai_api(prompt, sys_role="請只回傳合法的 JSON 格式，不要有 Markdown 標記。")
-        # 清理 JSON
-        match = re.search(r'\{.*\}', res_text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        else:
-            return None
-    except:
+        # 強制要求 JSON
+        res_text = call_ai_api(prompt, sys_role="You are a data assistant. Output ONLY valid JSON.")
+        
+        # 清理 JSON (有些 AI 會加上 ```json ... ```)
+        # 1. 嘗試直接解析
+        try:
+            return json.loads(res_text)
+        except:
+            # 2. 如果失敗，嘗試用正則表達式抓取 {...}
+            match = re.search(r'\{.*\}', res_text, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+            else:
+                return None
+    except Exception as e:
+        st.error(f"連線錯誤: {str(e)}")
         return None
 
 # --- 初始化 Session ---
@@ -138,12 +140,14 @@ if 'step' not in st.session_state: st.session_state.step = 0
 if 'final_title' not in st.session_state: st.session_state.final_title = ""
 if 'refs' not in st.session_state: st.session_state.refs = ""
 if 'parsed_refs' not in st.session_state: st.session_state.parsed_refs = "" 
-if 'sim_data' not in st.session_state: st.session_state.sim_data = None # 新增：存模擬數據
+if 'sim_data' not in st.session_state: st.session_state.sim_data = None
 if 'outline' not in st.session_state: st.session_state.outline = ""
-if 'content' not in st.session_state: st.session_state.content = {}
+# 確保 content 是字典
+if 'content' not in st.session_state or not isinstance(st.session_state.content, dict):
+    st.session_state.content = {}
 
 # --- 主畫面 ---
-st.title("🎓 論文寫作助手 (旗艦雙核心版)")
+st.title("🎓 論文寫作助手 (旗艦修復版)")
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -176,7 +180,6 @@ elif st.session_state.step == 1:
         if not raw_refs: st.error("請貼上文獻")
         else:
             with st.spinner("AI 正在分批閱讀與歸納..."):
-                # 這裡簡化分批邏輯，直接呼叫一次 (實際可保留你原本的 smart_batch_process)
                 prompt = f"請歸納以下文獻重點，包含學者、年份、變數、發現。\n{raw_refs[:15000]}"
                 st.session_state.parsed_refs = call_ai_api(prompt)
                 st.success("文獻解析完成！")
@@ -187,7 +190,6 @@ elif st.session_state.step == 1:
         with col1: 
             if st.button("⬅️ 上一步"): st.session_state.step = 0; st.rerun()
         with col2:
-            # 關鍵修改：下一步是去「建立模型」，而不是直接寫大綱
             if st.button("下一步 (建立分析模型) ➡️", type="primary"): 
                 st.session_state.step = 2
                 st.rerun()
@@ -257,6 +259,7 @@ elif st.session_state.step == 3:
         特別要求：在第三章與第四章，必須引用上述的「分析模型」與「模擬數據」結果。
         """
         st.session_state.outline = call_ai_api(prompt)
+        st.rerun() # 生成後自動刷新
         
     if st.session_state.outline:
         st.markdown(st.session_state.outline)
@@ -267,29 +270,51 @@ elif st.session_state.step == 3:
         with col2:
              if st.button("下一步 (開始寫作) ➡️", type="primary"): st.session_state.step = 4; st.rerun()
 
-# === 步驟 4: 寫作 ===
+# === 步驟 4: 寫作 (修復後的核心) ===
 elif st.session_state.step == 4:
     st.subheader("步驟 5：逐章撰寫")
     
     chapters = ["第一章 緒論", "第二章 文獻探討", "第三章 研究方法", "第四章 分析結果", "第五章 結論"]
-    selected_ch = st.selectbox("選擇章節", chapters)
     
-    if st.button(f"🚀 撰寫 {selected_ch}"):
+    # 選擇章節
+    selected_ch = st.selectbox("選擇要撰寫或檢視的章節", chapters)
+    
+    st.info(f"📍 目前選擇：{selected_ch}")
+
+    # 撰寫按鈕
+    if st.button(f"🚀 讓 AI 撰寫 {selected_ch}"):
         sim_context = json.dumps(st.session_state.sim_data, ensure_ascii=False) if st.session_state.sim_data else "無"
+        
+        instruction = ""
+        if "第三章" in selected_ch:
+            instruction = "請詳細描述研究設計、變數定義與數學模型 (AHP/FCM等)。"
+        elif "第四章" in selected_ch:
+            instruction = "請根據提供的模擬數據 (Matrix/Weights) 進行詳細的數據分析與解釋。"
+        
         prompt = f"""
         題目：{st.session_state.final_title}
         章節：{selected_ch}
         大綱：{st.session_state.outline}
         分析數據：{sim_context}
         
-        請撰寫本章內容。若為第三章，請詳細描述方法論。若為第四章，請將模擬數據轉化為表格與分析文字。
+        請撰寫本章內容。{instruction}
         """
-        st.session_state.content[selected_ch] = call_ai_api(prompt)
         
-    if selected_ch in st.session_state.content:
-        st.markdown(st.session_state.content[selected_ch])
-    
+        with st.spinner(f"正在撰寫 {selected_ch}..."):
+            st.session_state.content[selected_ch] = call_ai_api(prompt)
+            st.rerun() # 寫完後強制刷新，這是關鍵！
+
     st.divider()
+
+    # --- 內容顯示區 (邏輯判斷) ---
+    if selected_ch in st.session_state.content:
+        st.markdown(f"### 📄 {selected_ch} 草稿內容")
+        st.markdown(st.session_state.content[selected_ch])
+    else:
+        st.warning(f"⚠️ {selected_ch} 尚未撰寫。請點擊上方按鈕開始生成。")
+
+    st.divider()
+    
     # 下載區
     final_doc = f"# {st.session_state.final_title}\n\n"
     for ch in chapters:
