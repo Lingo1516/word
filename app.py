@@ -1,281 +1,13 @@
-import streamlit as st
-from groq import Groq
-import google.generativeai as genai
-import requests
-import json
-import re
-import time
-import string
-import pandas as pd
-from io import BytesIO
-
-# --- 1. 系統基礎設定 ---
-st.set_page_config(page_title="論文寫作助手 (旗艦修復版)", layout="wide", page_icon="🎓")
-
-# --- 2. 側邊欄：引擎與方法設定 ---
-with st.sidebar:
-    st.header("⚙️ 核心設定")
-    
-    # 1. 引擎選擇
-    engine_choice = st.radio("AI 引擎", ["Groq (Llama 3)", "Google (Gemini)"])
-    
-    api_key = ""
-    if engine_choice == "Groq (Llama 3)":
-        st.info("🚀 速度快，適合文獻閱讀。")
-        api_key = st.text_input("Groq Key", type="password", help="gsk_...")
-    else:
-        st.info("🧠 邏輯強，適合數學模擬。")
-        api_key = st.text_input("Google Key", type="password", help="AIza...")
-
-    st.divider()
-
-    # 2. 研究方法論設定 (雙核心)
-    st.header("🛠️ 方法論設定")
-    research_mode = st.radio("研究路徑", ["MCDM (量化/決策)", "Case Study (質性/個案)"])
-    
-    mcdm_method = None
-    case_method = None
-    
-    if research_mode == "MCDM (量化/決策)":
-        mcdm_method = st.selectbox(
-            "選擇模型：",
-            ["AHP (層級分析法)", "DEMATEL (決策實驗室法)", "FCM (模糊認知圖)", "ANP (網路分析法)"]
-        )
-        st.caption("模擬參數：")
-        c1, c2 = st.columns(2)
-        with c1: criteria_size = st.number_input("準則數", value=15)
-        with c2: dim_size = st.number_input("構面數", value=4)
-        pool_size = 50 # 固定預設
-
-    else: # Case Study
-        case_method = st.selectbox(
-            "選擇流派：",
-            ["Yin (實證型)", "Harvard (教學型)", "Eisenhardt (建構型)", "Stake (詮釋型)"]
-        )
-
-# --- 函數 A: 一般文字生成 (Groq/Gemini) ---
-def call_ai_api(prompt, sys_role="你是一位學術專家。"):
-    if not api_key: return "⚠️ 請輸入 API Key"
-    try:
-        if engine_choice == "Groq (Llama 3)":
-            client = Groq(api_key=api_key)
-            completion = client.chat.completions.create(
-                messages=[{"role": "system", "content": sys_role}, {"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile", temperature=0.5, max_tokens=4000
-            )
-            return completion.choices[0].message.content
-        elif engine_choice == "Google (Gemini)":
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(f"{sys_role}\n\n{prompt}")
-            return response.text
-    except Exception as e: return f"❌ Error: {str(e)}"
-
-# --- 函數 B: 深度模擬 (強制回傳 JSON) ---
-def run_simulation_analysis(text, key, mode, m_method, c_method, c_n, d_n):
-    
-    prompt = ""
-    
-    if mode == "MCDM (量化/決策)":
-        method_instr = ""
-        if "AHP" in m_method: method_instr = "模擬 Saaty 1-9 成對比較矩陣，計算權重。"
-        elif "DEMATEL" in m_method: method_instr = "模擬 0-4 直接關係矩陣，計算中心度與原因度。"
-        elif "FCM" in m_method: method_instr = "模擬 -1 到 1 影響矩陣，進行推論。"
-        elif "ANP" in m_method: method_instr = "模擬超矩陣，計算極限權重。"
-        
-        prompt = f"""
-        你是一個 MCDM 專家。方法：{m_method}。
-        請根據文獻執行：收斂({c_n}準則) -> 層級({d_n}構面) -> 數據模擬。
-        
-        【嚴格輸出 JSON 格式，不要包含 Markdown ```json 標記】：
-        {{
-            "final_hierarchy": [ {{ "dimension_name": "...", "contained_criteria": [ {{ "criteria_name": "...", "reasoning": "..." }} ] }} ],
-            "step4_simulation": {{
-                "method_used": "{m_method}",
-                "matrix_name": "{m_method} 矩陣",
-                "weights": [ {{ "criteria": "準則名稱", "weight": 0.1 }} ],
-                "matrix_data": [ {{ "from": "A", "to": "B", "value": 0.5 }} ],
-                "companies": [ {{ "name": "企業A", "scores": {{ "準則名稱": 80 }} }} ]
-            }}
-        }}
-        文獻摘要：{text[:10000]}
-        """
-    else:
-        prompt = f"""
-        你是一個質性研究專家。流派：{c_method}。
-        請根據文獻規劃個案研究架構。
-        【嚴格輸出 JSON 格式，不要包含 Markdown ```json 標記】：
-        {{
-            "case_study_content": {{
-                "intro": "方法論說明...",
-                "sections": [ {{ "title": "章節1", "content": "內容..." }} ],
-                "key_findings": ["發現1", "發現2"]
-            }}
-        }}
-        文獻摘要：{text[:10000]}
-        """
-
-    # 呼叫 API
-    try:
-        # 強制要求 JSON
-        res_text = call_ai_api(prompt, sys_role="You are a data assistant. Output ONLY valid JSON.")
-        
-        # 清理 JSON (有些 AI 會加上 ```json ... ```)
-        # 1. 嘗試直接解析
-        try:
-            return json.loads(res_text)
-        except:
-            # 2. 如果失敗，嘗試用正則表達式抓取 {...}
-            match = re.search(r'\{.*\}', res_text, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            else:
-                return None
-    except Exception as e:
-        st.error(f"連線錯誤: {str(e)}")
-        return None
-
-# --- 初始化 Session ---
-if 'step' not in st.session_state: st.session_state.step = 0
-if 'final_title' not in st.session_state: st.session_state.final_title = ""
-if 'refs' not in st.session_state: st.session_state.refs = ""
-if 'parsed_refs' not in st.session_state: st.session_state.parsed_refs = "" 
-if 'sim_data' not in st.session_state: st.session_state.sim_data = None
-if 'outline' not in st.session_state: st.session_state.outline = ""
-# 確保 content 是字典
-if 'content' not in st.session_state or not isinstance(st.session_state.content, dict):
-    st.session_state.content = {}
-
-# --- 主畫面 ---
-st.title("🎓 論文寫作助手 (旗艦修復版)")
-
-# === 步驟 0: 題目 ===
-if st.session_state.step == 0:
-    st.subheader("步驟 1：擬定題目")
-    
-    keywords = st.text_input("輸入關鍵字 (例如：ESG, 供應鏈, AI)：")
-    if st.button("✨ 生成題目"):
-        if not keywords: st.error("請輸入關鍵字")
-        else:
-            method_str = mcdm_method if research_mode == "MCDM (量化/決策)" else case_method
-            prompt = f"關鍵字：{keywords}。方法：{method_str}。請產生 3 個繁體中文學術題目。"
-            st.info(call_ai_api(prompt))
-
-    title_input = st.text_input("👇 確認最終題目", value=st.session_state.final_title)
-    if st.button("下一步 (文獻導入)"):
-        if title_input:
-            st.session_state.final_title = title_input
-            st.session_state.step = 1
-            st.rerun()
-
-# === 步驟 1: 文獻 (分批處理) ===
-elif st.session_state.step == 1:
-    st.subheader("步驟 2：導入文獻 (分批處理)")
-    st.caption(f"當前題目：{st.session_state.final_title}")
-    
-    raw_refs = st.text_area("請貼上大量文獻資料：", value=st.session_state.refs, height=300)
-    st.session_state.refs = raw_refs
-
-    if st.button("✨ 啟動文獻解析"):
-        if not raw_refs: st.error("請貼上文獻")
-        else:
-            with st.spinner("AI 正在分批閱讀與歸納..."):
-                prompt = f"請歸納以下文獻重點，包含學者、年份、變數、發現。\n{raw_refs[:15000]}"
-                st.session_state.parsed_refs = call_ai_api(prompt)
-                st.success("文獻解析完成！")
-
-    if st.session_state.parsed_refs:
-        st.markdown(st.session_state.parsed_refs)
-        col1, col2 = st.columns([1,1])
-        with col1: 
-            if st.button("⬅️ 上一步"): st.session_state.step = 0; st.rerun()
-        with col2:
-            if st.button("下一步 (建立分析模型) ➡️", type="primary"): 
-                st.session_state.step = 2
-                st.rerun()
-
-# === 步驟 2: 建立分析模型 (MCDM/Case) ===
-elif st.session_state.step == 2:
-    st.subheader(f"步驟 3：建立 {research_mode} 分析模型")
-    st.info("AI 將根據文獻，自動建構指標體系、模擬數據矩陣或個案架構。")
-    
-    current_method = mcdm_method if research_mode == "MCDM (量化/決策)" else case_method
-    
-    if st.button(f"🚀 執行 {current_method} 模擬"):
-        with st.spinner("正在建構數學模型與模擬數據..."):
-            result = run_simulation_analysis(
-                st.session_state.refs, api_key, research_mode, 
-                mcdm_method, case_method, criteria_size if 'criteria_size' in locals() else 15, dim_size if 'dim_size' in locals() else 4
-            )
-            
-            if result:
-                st.session_state.sim_data = result
-                st.success("模型建構完成！")
-            else:
-                st.error("模擬失敗，請重試或檢查 Key。")
-
-    # 顯示模擬結果
-    if st.session_state.sim_data:
-        data = st.session_state.sim_data
-        
-        if research_mode == "MCDM (量化/決策)":
-            t1, t2, t3 = st.tabs(["層級架構", "數據模擬", "企業評比"])
-            with t1:
-                st.json(data.get("final_hierarchy", []))
-            with t2:
-                sim = data.get("step4_simulation", {})
-                st.caption(f"模擬矩陣：{sim.get('matrix_name')}")
-                st.dataframe(pd.DataFrame(sim.get("matrix_data", [])))
-                st.bar_chart(pd.DataFrame(sim.get("weights", [])).set_index("criteria"))
-            with t3:
-                st.dataframe(pd.DataFrame(sim.get("companies", [])))
-                
-        else: # Case Study
-            case_content = data.get("case_study_content", {})
-            st.write(case_content.get("intro"))
-            for sec in case_content.get("sections", []):
-                with st.expander(sec["title"]):
-                    st.write(sec["content"])
-
-        col1, col2 = st.columns([1,1])
-        with col1:
-             if st.button("⬅️ 上一步"): st.session_state.step = 1; st.rerun()
-        with col2:
-             if st.button("下一步 (生成大綱) ➡️", type="primary"): st.session_state.step = 3; st.rerun()
-
-# === 步驟 3: 大綱 ===
-elif st.session_state.step == 3:
-    st.subheader("步驟 4：生成論文大綱")
-    
-    if st.button("✨ 生成大綱"):
-        # 把文獻和模擬數據都餵給 AI
-        sim_context = json.dumps(st.session_state.sim_data, ensure_ascii=False) if st.session_state.sim_data else "無模擬數據"
-        prompt = f"""
-        題目：{st.session_state.final_title}
-        文獻重點：{st.session_state.parsed_refs}
-        分析模型/數據：{sim_context}
-        
-        請撰寫詳細論文大綱。
-        特別要求：在第三章與第四章，必須引用上述的「分析模型」與「模擬數據」結果。
-        """
-        st.session_state.outline = call_ai_api(prompt)
-        st.rerun() # 生成後自動刷新
-        
-    if st.session_state.outline:
-        st.markdown(st.session_state.outline)
-        
-        col1, col2 = st.columns([1,1])
-        with col1:
-             if st.button("⬅️ 上一步"): st.session_state.step = 2; st.rerun()
-        with col2:
-             if st.button("下一步 (開始寫作) ➡️", type="primary"): st.session_state.step = 4; st.rerun()
-
-# === 步驟 4: 寫作 (修復後的核心) ===
+# === 步驟 4: 寫作 (智慧數據管制版) ===
 elif st.session_state.step == 4:
     st.subheader("步驟 5：逐章撰寫")
     
     chapters = ["第一章 緒論", "第二章 文獻探討", "第三章 研究方法", "第四章 分析結果", "第五章 結論"]
     
+    # 確保 content 是字典格式
+    if 'content' not in st.session_state or not isinstance(st.session_state.content, dict):
+        st.session_state.content = {}
+
     # 選擇章節
     selected_ch = st.selectbox("選擇要撰寫或檢視的章節", chapters)
     
@@ -283,33 +15,59 @@ elif st.session_state.step == 4:
 
     # 撰寫按鈕
     if st.button(f"🚀 讓 AI 撰寫 {selected_ch}"):
-        sim_context = json.dumps(st.session_state.sim_data, ensure_ascii=False) if st.session_state.sim_data else "無"
         
+        # === 關鍵修改：智慧數據管制 ===
+        # 只有在寫「第四章」或「結論」時，才把數據餵給 AI
+        # 其他章節 (緒論、文獻、方法) 強制隱藏數據，避免 AI 偷跑去寫分析結果
+        sim_json = json.dumps(st.session_state.sim_data, ensure_ascii=False) if st.session_state.sim_data else "無"
+        
+        current_data_context = "本章節不涉及數據分析，請專注於理論與架構。"
+        if "第四章" in selected_ch or "結論" in selected_ch:
+            current_data_context = f"【模擬分析數據】：\n{sim_json}"
+            
+        # 針對不同章節的專屬指令
         instruction = ""
-        if "第三章" in selected_ch:
-            instruction = "請詳細描述研究設計、變數定義與數學模型 (AHP/FCM等)。"
+        if "第一章" in selected_ch:
+            instruction = "請撰寫研究背景、動機與目的。絕對不要提及具體的分析數據結果。"
+        elif "第二章" in selected_ch:
+            instruction = "請進行文獻回顧與假說推導。絕對不要提及具體的分析數據結果。"
+        elif "第三章" in selected_ch:
+            instruction = "請詳細描述研究設計、變數定義與數學模型 (AHP/FCM等)。不要寫出結果。"
         elif "第四章" in selected_ch:
-            instruction = "請根據提供的模擬數據 (Matrix/Weights) 進行詳細的數據分析與解釋。"
+            instruction = "這是論文的核心。請務必引用上述的【模擬分析數據】，將表格數據轉化為文字分析，解釋各準則的權重與企業排名的意義。"
         
         prompt = f"""
-        題目：{st.session_state.final_title}
-        章節：{selected_ch}
-        大綱：{st.session_state.outline}
-        分析數據：{sim_context}
+        你是一個嚴謹的學術論文寫作助手。
         
-        請撰寫本章內容。{instruction}
+        【任務目標】：請撰寫「{selected_ch}」的完整內容。
+        【論文題目】：{st.session_state.final_title}
+        【大綱架構】：{st.session_state.outline}
+        {current_data_context}
+        
+        ⚠️ 嚴格規則：
+        1. 請**只撰寫**「{selected_ch}」的內容，不要離題。
+        2. {instruction}
+        3. 請使用學術語氣 (Academic Tone)，並使用 Markdown 格式 (包含標題 #, ##)。
+        
+        請開始撰寫：
         """
         
-        with st.spinner(f"正在撰寫 {selected_ch}..."):
+        with st.spinner(f"AI 正在專注撰寫 {selected_ch} (已過濾干擾資訊)..."):
             st.session_state.content[selected_ch] = call_ai_api(prompt)
-            st.rerun() # 寫完後強制刷新，這是關鍵！
+            st.rerun() # 強制刷新畫面
 
     st.divider()
 
-    # --- 內容顯示區 (邏輯判斷) ---
+    # --- 內容顯示區 ---
     if selected_ch in st.session_state.content:
         st.markdown(f"### 📄 {selected_ch} 草稿內容")
         st.markdown(st.session_state.content[selected_ch])
+        
+        # 貼心功能：重新生成按鈕
+        if st.button("🔄 不滿意？重新撰寫此章節"):
+            # 清除該章節內容並重跑
+            del st.session_state.content[selected_ch]
+            st.rerun()
     else:
         st.warning(f"⚠️ {selected_ch} 尚未撰寫。請點擊上方按鈕開始生成。")
 
