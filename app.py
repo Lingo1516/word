@@ -10,7 +10,7 @@ import pandas as pd
 from io import BytesIO
 
 # --- 1. 系統基礎設定 ---
-st.set_page_config(page_title="論文寫作助手 (引用強化版)", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="論文寫作助手 (學術格式修正版)", layout="wide", page_icon="🎓")
 
 # --- 2. 側邊欄：引擎與方法設定 ---
 with st.sidebar:
@@ -130,7 +130,7 @@ if 'content' not in st.session_state or not isinstance(st.session_state.content,
     st.session_state.content = {}
 
 # --- 主畫面 ---
-st.title("🎓 論文寫作助手 (引用強化版)")
+st.title("🎓 論文寫作助手 (學術格式修正版)")
 
 # === 步驟 0: 題目 ===
 if st.session_state.step == 0:
@@ -222,7 +222,7 @@ elif st.session_state.step == 3:
         with col2:
              if st.button("下一步 (開始寫作) ➡️", type="primary"): st.session_state.step = 4; st.rerun()
 
-# === 步驟 4: 寫作 (引用強化版) ===
+# === 步驟 4: 寫作 (核心修正版) ===
 elif st.session_state.step == 4:
     st.subheader("步驟 5：逐章撰寫")
     chapters = ["第一章 緒論", "第二章 文獻探討", "第三章 研究方法", "第四章 分析結果", "第五章 結論"]
@@ -230,16 +230,11 @@ elif st.session_state.step == 4:
     st.info(f"📍 目前選擇：{selected_ch}")
 
     if st.button(f"🚀 讓 AI 撰寫 {selected_ch}"):
-        # === 核心修改：資料注入邏輯 ===
         
-        # 1. 準備資料
         sim_json = json.dumps(st.session_state.sim_data, ensure_ascii=False) if st.session_state.sim_data else "無"
-        # 優先使用解析過的文獻，如果沒有則使用原始文獻
         ref_content = st.session_state.parsed_refs if st.session_state.parsed_refs else st.session_state.refs
-        # 截斷過長的文獻以免爆 Token (Gemini Flash 可承受較多，這裡設 20000 字)
         ref_content = ref_content[:20000]
 
-        # 2. 決定「餵」什麼資料給 AI
         input_context = ""
         instruction = ""
         
@@ -248,25 +243,24 @@ elif st.session_state.step == 4:
             instruction = "請根據題目撰寫研究背景、動機與目的。"
             
         elif "第二章" in selected_ch:
-            # 這是你要的：強制餵入文獻
-            input_context = f"【文獻庫資料 (這是你必須引用的來源)】：\n{ref_content}"
-            instruction = """
-            1. 這是文獻探討章節，請**嚴格引用**上述【文獻庫資料】中的內容。
-            2. 每一段論述後面，必須加上出處標註，格式為：[作者, 年份]。
-            3. 例如：「根據 [王小明, 2024] 的研究指出...」或「供應鏈韌性是關鍵 [Smith, 2023]」。
-            4. **禁止**憑空創造文獻，必須使用我提供的資料。
-            """
+            input_context = f"【文獻庫資料】：\n{ref_content}"
+            instruction = "嚴格引用文獻庫資料，每一段必須標註出處 [作者, 年份]，不可杜撰。"
             
         elif "第三章" in selected_ch:
-            input_context = "【注意】：本章專注於方法論介紹。"
-            instruction = "請詳細描述研究變數定義與數學模型 (AHP/FCM等)。"
+            # === 針對你遇到的問題進行修正 ===
+            input_context = f"【模型架構資料】：\n{sim_json}"
+            instruction = """
+            1. 請將上述【模型架構資料】(JSON) 轉化為詳細的學術文字描述。
+            2. **嚴禁直接貼上程式碼或 JSON 格式**。
+            3. 請將層級結構整理為條列式文字 (例如：本研究將準則歸納為四個構面...)。
+            4. 請用 LaTeX 格式撰寫數學公式 (例如：$W_i$, $\lambda_{max}$)，詳細說明該方法的演算步驟。
+            5. 請繪製文字表格來呈現評估指標體系。
+            """
             
         elif "第四章" in selected_ch or "結論" in selected_ch:
-            # 這是之前修好的：強制餵入數據
-            input_context = f"【模擬分析數據 (這是本章的核心)】：\n{sim_json}"
-            instruction = "請將上述的模擬數據轉化為詳細的文字分析，解釋權重與排名的意義。"
+            input_context = f"【模擬分析數據】：\n{sim_json}"
+            instruction = "請將模擬數據轉化為文字分析，解釋權重與排名的意義，並製作比較表格。"
 
-        # 3. 組合 Prompt
         prompt = f"""
         你是一個嚴謹的學術論文寫作助手。
         【題目】：{st.session_state.final_title}
@@ -283,7 +277,7 @@ elif st.session_state.step == 4:
         請開始撰寫：
         """
         
-        with st.spinner(f"正在撰寫 {selected_ch} (引用模式啟動)..."):
+        with st.spinner(f"正在撰寫 {selected_ch}..."):
             st.session_state.content[selected_ch] = call_ai_api(prompt)
             st.rerun()
 
