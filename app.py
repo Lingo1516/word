@@ -19,7 +19,7 @@ import pandas as pd
 # 【唯一需要設定的地方】把你的 Gemini Key 貼在這裡
 # 申請免費 Key：https://aistudio.google.com/app/apikey
 # ─────────────────────────────────────────────
-GEMINI_API_KEY = "YOUR_GEMINI_KEY_HERE"
+GEMINI_API_KEY = "AIzaSyAnKdMmY0-NHI6Vq6-FIu2jGHRVn6OOoEI"
 
 # ─────────────────────────────────────────────
 # 頁面設定
