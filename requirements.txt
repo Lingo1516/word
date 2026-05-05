@@ -1,3 +1,6 @@
 streamlit
 groq
 google-generativeai
+openai
+requests
+pandas
