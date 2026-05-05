@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     🎓 論文寫作助手 - 免設定版（內建 Gemini）               ║
+# ║     論文寫作助手 - 免設定版（內建 Gemini 2.0）              ║
 # ╚══════════════════════════════════════════════════════════════╝
-# requirements.txt 內容：
+# requirements.txt：
 #   streamlit
 #   google-generativeai
 #   requests
@@ -16,10 +16,10 @@ import time
 import pandas as pd
 
 # ─────────────────────────────────────────────
-# 【唯一需要設定的地方】把你的 Gemini Key 貼在這裡
+# 唯一需要設定的地方：貼上你的 Gemini Key
 # 申請免費 Key：https://aistudio.google.com/app/apikey
 # ─────────────────────────────────────────────
-GEMINI_API_KEY = "AIzaSyAnKdMmY0-NHI6Vq6-FIu2jGHRVn6OOoEI"
+GEMINI_API_KEY = "YOUR_GEMINI_KEY_HERE"
 
 # ─────────────────────────────────────────────
 # 頁面設定
@@ -37,7 +37,7 @@ def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體�
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel(
-            "gemini-1.5-flash",
+            "gemini-2.0-flash",
             generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
         )
         return model.generate_content(sys_role + "\n\n" + prompt).text
@@ -45,9 +45,11 @@ def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體�
         err = str(e)
         if "429" in err:
             return "今日免費額度已用完，請明天再試（台灣時間每天早上 8:00 重置）"
-        elif "API_KEY_INVALID" in err:
-            return "API Key 無效，請聯絡管理員"
-        return "發生錯誤：" + err[:100]
+        elif "API_KEY_INVALID" in err or "invalid" in err.lower():
+            return "API Key 無效，請確認 GEMINI_API_KEY 是否正確"
+        elif "404" in err:
+            return "模型不存在，請確認模型名稱"
+        return "發生錯誤：" + err[:150]
 
 
 # ─────────────────────────────────────────────
@@ -58,28 +60,35 @@ def fetch_semantic_scholar(query, limit=10, year_from=2018):
         res = requests.get(
             "https://api.semanticscholar.org/graph/v1/paper/search",
             params={
-                "query": query, "limit": limit,
+                "query": query,
+                "limit": limit,
                 "fields": "title,authors,year,abstract,externalIds,venue,citationCount",
                 "year": str(year_from) + "-"
             },
-            headers={"User-Agent": "ThesisAssistant/1.0"}, timeout=15
+            headers={"User-Agent": "ThesisAssistant/1.0"},
+            timeout=15
         )
         if res.status_code == 200:
             results = []
             for p in res.json().get("data", []):
-                if not p.get("title"): continue
+                if not p.get("title"):
+                    continue
                 authors = ", ".join([a.get("name", "") for a in p.get("authors", [])[:3]])
-                if len(p.get("authors", [])) > 3: authors += " et al."
+                if len(p.get("authors", [])) > 3:
+                    authors += " et al."
                 results.append({
-                    "title": p.get("title", ""), "authors": authors,
+                    "title": p.get("title", ""),
+                    "authors": authors,
                     "year": p.get("year", ""),
                     "abstract": (p.get("abstract") or "")[:500],
                     "venue": p.get("venue", ""),
                     "citations": p.get("citationCount", 0),
-                    "doi": p.get("externalIds", {}).get("DOI", ""), "lang": "en"
+                    "doi": p.get("externalIds", {}).get("DOI", ""),
+                    "lang": "en"
                 })
             return results
-    except Exception: pass
+    except Exception:
+        pass
     return []
 
 
@@ -88,31 +97,46 @@ def fetch_crossref(query, limit=10, year_from=2018):
         res = requests.get(
             "https://api.crossref.org/works",
             params={
-                "query": query, "rows": limit,
+                "query": query,
+                "rows": limit,
                 "filter": "from-pub-date:" + str(year_from),
                 "select": "title,author,published,abstract,DOI,container-title",
                 "mailto": "thesis@example.com"
-            }, timeout=15
+            },
+            timeout=15
         )
         if res.status_code == 200:
             results = []
             for item in res.json().get("message", {}).get("items", []):
                 title = item.get("title", [""])[0] if item.get("title") else ""
-                if not title: continue
+                if not title:
+                    continue
                 ar = item.get("author", [])
-                authors = ", ".join([a.get("family", "") + ", " + a.get("given", "") for a in ar[:3]])
-                if len(ar) > 3: authors += " et al."
+                authors = ", ".join([
+                    a.get("family", "") + ", " + a.get("given", "")
+                    for a in ar[:3]
+                ])
+                if len(ar) > 3:
+                    authors += " et al."
                 pub = item.get("published", {}).get("date-parts", [[""]])
                 year = pub[0][0] if pub and pub[0] else ""
                 abstract = re.sub(r"<[^>]+>", "", item.get("abstract", ""))[:500]
                 results.append({
-                    "title": title, "authors": authors, "year": year,
+                    "title": title,
+                    "authors": authors,
+                    "year": year,
                     "abstract": abstract,
-                    "venue": (item.get("container-title", [""])[0] if item.get("container-title") else ""),
-                    "citations": 0, "doi": item.get("DOI", ""), "lang": "en"
+                    "venue": (
+                        item.get("container-title", [""])[0]
+                        if item.get("container-title") else ""
+                    ),
+                    "citations": 0,
+                    "doi": item.get("DOI", ""),
+                    "lang": "en"
                 })
             return results
-    except Exception: pass
+    except Exception:
+        pass
     return []
 
 
@@ -123,13 +147,19 @@ def fetch_chinese_refs(topic, count=10, year_from=2018):
         "年份在 " + str(year_from) + " 年以後。"
         "只輸出 JSON array，不要其他文字：\n"
         '[{"title":"論文標題","authors":"作者姓名","year":2021,'
-        '"journal":"期刊名稱","volume":"38(2)","pages":"45-78","abstract":"摘要50字以內"}]'
+        '"journal":"期刊名稱","volume":"38(2)","pages":"45-78",'
+        '"abstract":"摘要50字以內"}]'
     )
     res = call_ai(prompt, sys_role="Output ONLY valid JSON array.", max_tokens=3000)
     try:
         data = json.loads(res)
         for item in data:
-            item.update({"lang": "zh", "doi": "", "venue": item.get("journal", ""), "citations": 0})
+            item.update({
+                "lang": "zh",
+                "doi": "",
+                "venue": item.get("journal", ""),
+                "citations": 0
+            })
         return data
     except Exception:
         match = re.search(r"\[.*\]", res, re.DOTALL)
@@ -137,9 +167,15 @@ def fetch_chinese_refs(topic, count=10, year_from=2018):
             try:
                 data = json.loads(match.group(0))
                 for item in data:
-                    item.update({"lang": "zh", "doi": "", "venue": item.get("journal", ""), "citations": 0})
+                    item.update({
+                        "lang": "zh",
+                        "doi": "",
+                        "venue": item.get("journal", ""),
+                        "citations": 0
+                    })
                 return data
-            except Exception: pass
+            except Exception:
+                pass
     return []
 
 
@@ -161,11 +197,14 @@ def format_apa(ref):
         vol   = ref.get("volume", "")
         pages = ref.get("pages", "")
         apa   = authors + "（" + str(year) + "）。" + title + "。*" + venue + "*"
-        if vol:   apa += "，" + vol
-        if pages: apa += "，" + pages
+        if vol:
+            apa += "，" + vol
+        if pages:
+            apa += "，" + pages
         return apa + "。"
     apa = authors + " (" + str(year) + "). " + title + ". *" + venue + "*."
-    if doi: apa += " https://doi.org/" + doi
+    if doi:
+        apa += " https://doi.org/" + doi
     return apa
 
 
@@ -174,13 +213,14 @@ def format_apa(ref):
 # ─────────────────────────────────────────────
 def run_simulation(refs_summary, m_method, c_method, c_n, d_n):
     used_method = m_method or c_method or "混合方法"
+    method_key  = used_method.split("（")[0].strip()
     method_instr = {
         "AHP":     "模擬 Saaty 1-9 成對比較矩陣，計算特徵向量權重，CR < 0.1。",
         "DEMATEL": "模擬 0-4 直接關係矩陣，計算中心度(D+R)與原因度(D-R)。",
         "SEM":     "模擬結構方程模型路徑係數，計算 β 值與 p 值。",
         "ANP":     "模擬超矩陣與極限矩陣，計算極限權重。",
         "FCM":     "模擬 -1 到 1 影響矩陣，進行穩定態推論。",
-    }.get(used_method.split("（")[0].strip(), "模擬迴歸分析，計算標準化係數。")
+    }.get(method_key, "模擬迴歸分析，計算標準化係數。")
 
     prompt = (
         "你是 MCDM 與統計分析專家，方法：" + used_method + "。\n"
@@ -191,22 +231,27 @@ def run_simulation(refs_summary, m_method, c_method, c_n, d_n):
         "4. 生成合理統計數值（β、t、p、AVE、CR、α）\n\n"
         "只輸出 JSON，格式：\n"
         '{"final_hierarchy":[{"dimension_name":"構面名","dimension_code":"D1",'
-        '"contained_criteria":[{"criteria_name":"準則","criteria_code":"C1","reasoning":"說明"}]}],'
+        '"contained_criteria":[{"criteria_name":"準則","criteria_code":"C1",'
+        '"reasoning":"說明"}]}],'
         '"step4_simulation":{"method_used":"' + used_method + '",'
         '"weights":[{"criteria":"準則","dimension":"構面","weight":0.08,"rank":1}],'
-        '"regression":[{"hypothesis":"H1","path":"A->B","beta":0.43,"t_value":5.21,"p_value":"<0.001","supported":true}],'
+        '"regression":[{"hypothesis":"H1","path":"A->B","beta":0.43,'
+        '"t_value":5.21,"p_value":"<0.001","supported":true}],'
         '"reliability":[{"dimension":"構面","alpha":0.87,"AVE":0.62,"CR":0.88}],'
-        '"interview_themes":[{"theme":"主題一","description":"說明","quotes":["受訪者A（HR主管）表示：\'...\'"]}]}}\n\n'
+        '"interview_themes":[{"theme":"主題一","description":"說明",'
+        '"quotes":["受訪者A（HR主管）表示：某某某"]}]}}\n\n'
         "文獻摘要：" + refs_summary[:8000]
     )
     try:
         res = call_ai(prompt, sys_role="Output ONLY valid JSON. No markdown.", max_tokens=5000)
         cleaned = re.sub(r"^```json\s*|^```\s*|```\s*$", "", res.strip(), flags=re.MULTILINE)
-        try:    return json.loads(cleaned)
+        try:
+            return json.loads(cleaned)
         except Exception:
             match = re.search(r"\{.*\}", cleaned, re.DOTALL)
             return json.loads(match.group(0)) if match else None
-    except Exception: return None
+    except Exception:
+        return None
 
 
 # ─────────────────────────────────────────────
@@ -253,8 +298,8 @@ CHAPTER_CONFIG = {
             "3.2 研究設計（600字）：量化+質性混合方法理由，三角驗證\n"
             "3.3 研究變數與操作型定義（1000字）：Markdown表格\n"
             "3.4 資料收集方法（700字）：問卷對象、樣本數依據、抽樣方式、訪談程序\n"
-            "3.5 資料分析方法（1500字）：描述統計->信度->CFA->SEM（含公式）；質性主題分析六步驟\n"
-            "3.6 研究倫理（200字）：知情同意、匿名保護、IRB"
+            "3.5 資料分析方法（1500字）：描述統計->信度->CFA->SEM；質性主題分析六步驟\n"
+            "3.6 研究倫理（200字）：知情同意、匿名保護"
         )
     },
     "第四章 研究結果與分析": {
@@ -324,7 +369,11 @@ def write_chapter(chapter_name, title, outline, refs_list, sim_data):
         "請立即完整撰寫 " + chapter_name + "，每個小節不得省略："
     )
 
-    result = call_ai(prompt, sys_role="你是嚴謹的繁體中文學術論文教授，每次回應必須詳盡完整。", max_tokens=6000)
+    result = call_ai(
+        prompt,
+        sys_role="你是嚴謹的繁體中文學術論文教授，每次回應必須詳盡完整。",
+        max_tokens=6000
+    )
 
     if len(re.sub(r"\s", "", result)) < int(target * 0.7):
         supplement = call_ai(
@@ -340,10 +389,17 @@ def write_chapter(chapter_name, title, outline, refs_list, sim_data):
 # Session 初始化
 # ─────────────────────────────────────────────
 defaults = {
-    "step": 0, "final_title": "", "refs_list": [],
-    "refs_summary": "", "sim_data": None, "outline": "",
-    "content": {}, "integrated_abstract": "", "integrated_ack": "",
-    "integrated_transitions": {}, "polished_ch1": "",
+    "step": 0,
+    "final_title": "",
+    "refs_list": [],
+    "refs_summary": "",
+    "sim_data": None,
+    "outline": "",
+    "content": {},
+    "integrated_abstract": "",
+    "integrated_ack": "",
+    "integrated_transitions": {},
+    "polished_ch1": "",
     "full_integrated_paper": ""
 }
 for k, v in defaults.items():
@@ -358,7 +414,7 @@ chapters_list = list(CHAPTER_CONFIG.keys())
 with st.sidebar:
     st.title("研究設定")
     st.success("✅ AI 已內建，直接使用！")
-    st.caption("由 Google Gemini 驅動（免費版）")
+    st.caption("由 Google Gemini 2.0 Flash 驅動（免費版）")
     st.divider()
 
     st.header("研究方法論")
@@ -367,10 +423,10 @@ with st.sidebar:
         ["MCDM（量化/決策）", "混合方法（量化+質性）", "Case Study（質性/個案）"]
     )
 
-    mcdm_method = None
-    case_method = None
+    mcdm_method   = None
+    case_method   = None
     criteria_size = 12
-    dim_size = 4
+    dim_size      = 4
 
     if "MCDM" in research_mode:
         mcdm_method = st.selectbox(
@@ -378,18 +434,26 @@ with st.sidebar:
             ["AHP（層級分析法）", "DEMATEL（決策實驗室法）", "ANP（網路分析法）", "FCM（模糊認知圖）"]
         )
         c1, c2 = st.columns(2)
-        with c1: criteria_size = st.number_input("準則數", value=15, min_value=5)
-        with c2: dim_size      = st.number_input("構面數", value=4,  min_value=2)
+        with c1:
+            criteria_size = st.number_input("準則數", value=15, min_value=5)
+        with c2:
+            dim_size = st.number_input("構面數", value=4, min_value=2)
     elif "混合" in research_mode:
-        mcdm_method = st.selectbox("量化方法", ["SEM（結構方程模型）", "迴歸分析", "AHP（層級分析法）"])
-        case_method = st.selectbox("質性方法", ["半結構式訪談", "焦點團體", "個案研究"])
+        mcdm_method = st.selectbox(
+            "量化方法",
+            ["SEM（結構方程模型）", "迴歸分析", "AHP（層級分析法）"]
+        )
+        case_method = st.selectbox(
+            "質性方法",
+            ["半結構式訪談", "焦點團體", "個案研究"]
+        )
     else:
         case_method = st.selectbox(
             "質性流派",
             ["Yin（實證型）", "Harvard（教學型）", "Eisenhardt（建構型）", "Stake（詮釋型）"]
         )
         criteria_size = 10
-        dim_size = 3
+        dim_size      = 3
 
     st.divider()
     st.header("文獻設定")
@@ -401,15 +465,18 @@ with st.sidebar:
 # 主畫面
 # ─────────────────────────────────────────────
 st.title("🎓 論文寫作助手")
-st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 × 由 Google Gemini 驅動")
+st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 × 由 Google Gemini 2.0 驅動")
 
-prog = ["① 題目", "② 文獻", "③ 模型", "④ 大綱", "⑤ 寫作＆整合"]
+prog  = ["① 題目", "② 文獻", "③ 模型", "④ 大綱", "⑤ 寫作＆整合"]
 pcols = st.columns(5)
 for i, label in enumerate(prog):
     with pcols[i]:
-        if st.session_state.step > i:       st.success(label)
-        elif st.session_state.step == i:    st.info("**" + label + "**")
-        else:                               st.caption(label)
+        if st.session_state.step > i:
+            st.success(label)
+        elif st.session_state.step == i:
+            st.info("**" + label + "**")
+        else:
+            st.caption(label)
 st.divider()
 
 # ════════════════════════════════════════════
@@ -424,17 +491,18 @@ if st.session_state.step == 0:
             st.error("請輸入關鍵字")
         else:
             method_str = mcdm_method or case_method or research_mode
-            p = (
-                "關鍵字：" + keywords + "，研究方法：" + method_str + "。\n"
-                "請產生 5 個繁體中文碩士論文題目，每個附說明研究方向與貢獻。"
-            )
-            st.info(call_ai(p))
+            with st.spinner("生成中..."):
+                st.info(call_ai(
+                    "關鍵字：" + keywords + "，研究方法：" + method_str + "。\n"
+                    "請產生 5 個繁體中文碩士論文題目，每個附說明研究方向與貢獻。"
+                ))
 
     title_input = st.text_input(
         "確認最終題目",
         value=st.session_state.final_title,
         placeholder="例如：人才培訓教育訓練對組織行為的影響：以留任率為衡量指標的實證研究"
     )
+
     if st.button("下一步 → 自動搜尋文獻", type="primary"):
         if title_input:
             st.session_state.final_title = title_input
@@ -449,13 +517,19 @@ if st.session_state.step == 0:
 elif st.session_state.step == 1:
     st.subheader("步驟 2：自動搜尋真實文獻")
     st.info("題目：" + st.session_state.final_title)
+
     c1, c2 = st.columns(2)
     c1.metric("英文文獻", str(en_paper_count) + " 篇", "Semantic Scholar + CrossRef")
     c2.metric("中文文獻", str(zh_paper_count) + " 篇", "AI 生成 TSSCI 格式")
 
     if st.button("🔍 自動搜尋文獻", type="primary"):
         with st.spinner("抓取真實學術文獻..."):
-            refs = search_all_refs(st.session_state.final_title, en_paper_count, zh_paper_count, year_from)
+            refs = search_all_refs(
+                st.session_state.final_title,
+                en_paper_count,
+                zh_paper_count,
+                year_from
+            )
             st.session_state.refs_list = refs
         with st.spinner("AI 歸納文獻重點..."):
             abstracts = "\n".join([
@@ -472,6 +546,7 @@ elif st.session_state.step == 1:
     if st.session_state.refs_list:
         zh_refs = [r for r in st.session_state.refs_list if r.get("lang") == "zh"]
         en_refs = [r for r in st.session_state.refs_list if r.get("lang") == "en"]
+
         t1, t2, t3 = st.tabs([
             "英文（" + str(len(en_refs)) + "篇）",
             "中文（" + str(len(zh_refs)) + "篇）",
@@ -501,10 +576,12 @@ elif st.session_state.step == 1:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("上一步"):
-                st.session_state.step = 0; st.rerun()
+                st.session_state.step = 0
+                st.rerun()
         with col2:
             if st.button("下一步 → 建立分析模型", type="primary"):
-                st.session_state.step = 2; st.rerun()
+                st.session_state.step = 2
+                st.rerun()
 
 # ════════════════════════════════════════════
 # 步驟 2：模型
@@ -518,7 +595,10 @@ elif st.session_state.step == 2:
         with st.spinner("建構模型中..."):
             result = run_simulation(
                 st.session_state.refs_summary,
-                mcdm_method, case_method, criteria_size, dim_size
+                mcdm_method,
+                case_method,
+                criteria_size,
+                dim_size
             )
             if result:
                 st.session_state.sim_data = result
@@ -536,10 +616,12 @@ elif st.session_state.step == 2:
                     st.markdown("　- **" + c.get("criteria_name", "") + "**：" + c.get("reasoning", ""))
         with t2:
             w = data.get("step4_simulation", {}).get("weights", [])
-            if w: st.dataframe(pd.DataFrame(w).sort_values("weight", ascending=False), use_container_width=True)
+            if w:
+                st.dataframe(pd.DataFrame(w).sort_values("weight", ascending=False), use_container_width=True)
         with t3:
             reg = data.get("step4_simulation", {}).get("regression", [])
-            if reg: st.dataframe(pd.DataFrame(reg), use_container_width=True)
+            if reg:
+                st.dataframe(pd.DataFrame(reg), use_container_width=True)
         with t4:
             for theme in data.get("step4_simulation", {}).get("interview_themes", []):
                 with st.expander("主題：" + theme.get("theme", "")):
@@ -550,10 +632,12 @@ elif st.session_state.step == 2:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("上一步"):
-                st.session_state.step = 1; st.rerun()
+                st.session_state.step = 1
+                st.rerun()
         with col2:
             if st.button("下一步 → 生成大綱", type="primary"):
-                st.session_state.step = 3; st.rerun()
+                st.session_state.step = 3
+                st.rerun()
 
 # ════════════════════════════════════════════
 # 步驟 3：大綱
@@ -568,16 +652,17 @@ elif st.session_state.step == 3:
             json.dumps(st.session_state.sim_data, ensure_ascii=False)[:3000]
             if st.session_state.sim_data else "無"
         )
-        outline_prompt = (
-            "題目：" + st.session_state.final_title + "\n"
-            "研究方法：" + method_str + "\n"
-            "分析模型：" + sim_context + "\n\n"
-            "請撰寫詳細五章論文大綱，每個小節附100字說明，格式：\n"
-            "# 第一章 緒論\n"
-            "## 1.1 研究背景與動機（說明...）\n"
-            "依此類推至第五章。"
-        )
-        st.session_state.outline = call_ai(outline_prompt, max_tokens=4000)
+        with st.spinner("生成大綱中..."):
+            st.session_state.outline = call_ai(
+                "題目：" + st.session_state.final_title + "\n"
+                "研究方法：" + method_str + "\n"
+                "分析模型：" + sim_context + "\n\n"
+                "請撰寫詳細五章論文大綱，每個小節附100字說明，格式：\n"
+                "# 第一章 緒論\n"
+                "## 1.1 研究背景與動機（說明...）\n"
+                "依此類推至第五章。",
+                max_tokens=4000
+            )
         st.rerun()
 
     if st.session_state.outline:
@@ -585,10 +670,12 @@ elif st.session_state.step == 3:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("上一步"):
-                st.session_state.step = 2; st.rerun()
+                st.session_state.step = 2
+                st.rerun()
         with col2:
             if st.button("下一步 → 開始寫作", type="primary"):
-                st.session_state.step = 4; st.rerun()
+                st.session_state.step = 4
+                st.rerun()
 
 # ════════════════════════════════════════════
 # 步驟 4：寫作 + 整合
@@ -608,7 +695,8 @@ elif st.session_state.step == 4:
             if ch not in st.session_state.content:
                 with st.spinner("撰寫 " + ch + "..."):
                     st.session_state.content[ch] = write_chapter(
-                        ch, st.session_state.final_title,
+                        ch,
+                        st.session_state.final_title,
                         st.session_state.outline,
                         st.session_state.refs_list,
                         st.session_state.sim_data
@@ -616,19 +704,26 @@ elif st.session_state.step == 4:
                     time.sleep(2)
         st.rerun()
 
-    tab_labels = [("✅ " if ch in st.session_state.content else "📝 ") + ch for ch in chapters_list]
-    tab_list   = st.tabs(tab_labels)
+    tab_labels = [
+        ("✅ " if ch in st.session_state.content else "📝 ") + ch
+        for ch in chapters_list
+    ]
+    tab_list = st.tabs(tab_labels)
 
     for i, (tab, ch) in enumerate(zip(tab_list, chapters_list)):
         with tab:
             config = CHAPTER_CONFIG[ch]
-            st.caption("目標：" + str(config["target_words"]) + " 字 ｜ " + ", ".join(config["sections"]))
+            st.caption(
+                "目標：" + str(config["target_words"]) + " 字 ｜ "
+                + ", ".join(config["sections"])
+            )
             cb1, cb2 = st.columns(2)
             with cb1:
                 if st.button("撰寫本章", key="w" + str(i), type="primary"):
                     with st.spinner("撰寫 " + ch + "（60-90秒）..."):
                         st.session_state.content[ch] = write_chapter(
-                            ch, st.session_state.final_title,
+                            ch,
+                            st.session_state.final_title,
                             st.session_state.outline,
                             st.session_state.refs_list,
                             st.session_state.sim_data
@@ -637,7 +732,8 @@ elif st.session_state.step == 4:
             with cb2:
                 if ch in st.session_state.content:
                     if st.button("重新撰寫", key="r" + str(i)):
-                        del st.session_state.content[ch]; st.rerun()
+                        del st.session_state.content[ch]
+                        st.rerun()
 
             if ch in st.session_state.content:
                 wc = len(re.sub(r"\s", "", st.session_state.content[ch]))
@@ -686,14 +782,16 @@ elif st.session_state.step == 4:
 
             with st.spinner("第一章語氣潤飾..."):
                 st.session_state.polished_ch1 = call_ai(
-                    "請對以下第一章進行學術語氣潤飾（「我」->「本研究」，補充連接詞，統一引用格式）：\n"
+                    "請對以下第一章進行學術語氣潤飾"
+                    "（「我」->「本研究」，補充連接詞，統一引用格式）：\n"
                     + st.session_state.content.get("第一章 緒論", "")[:4000],
                     max_tokens=5000
                 )
 
             with st.spinner("生成致謝辭..."):
                 st.session_state.integrated_ack = call_ai(
-                    "撰寫250字繁體中文學術論文致謝辭，感謝指導教授、口試委員、受訪者、同學、家人。"
+                    "撰寫250字繁體中文學術論文致謝辭，"
+                    "感謝指導教授、口試委員、受訪者、同學、家人。"
                     "主題：" + st.session_state.final_title,
                     max_tokens=800
                 )
@@ -702,7 +800,8 @@ elif st.session_state.step == 4:
             st.rerun()
 
         if st.session_state.integrated_abstract:
-            fp = "# " + st.session_state.final_title + "\n\n---\n\n"
+            # 組合全文
+            fp  = "# " + st.session_state.final_title + "\n\n---\n\n"
             fp += "## 致謝\n\n" + st.session_state.integrated_ack + "\n\n---\n\n"
             fp += "## 摘要\n\n" + st.session_state.integrated_abstract + "\n\n---\n\n"
             fp += "## 目錄\n\n"
@@ -724,30 +823,48 @@ elif st.session_state.step == 4:
                     fp += "\n---\n> 【章節銜接】 " + transitions[ch] + "\n\n---\n\n"
 
             fp += "## 參考文獻\n\n### 中文文獻\n\n"
-            for r in sorted([r for r in st.session_state.refs_list if r.get("lang") == "zh"],
-                             key=lambda x: str(x.get("authors", ""))):
+            for r in sorted(
+                [r for r in st.session_state.refs_list if r.get("lang") == "zh"],
+                key=lambda x: str(x.get("authors", ""))
+            ):
                 fp += format_apa(r) + "\n\n"
+
             fp += "\n### 英文文獻\n\n"
-            for r in sorted([r for r in st.session_state.refs_list if r.get("lang") == "en"],
-                             key=lambda x: str(x.get("authors", ""))):
+            for r in sorted(
+                [r for r in st.session_state.refs_list if r.get("lang") == "en"],
+                key=lambda x: str(x.get("authors", ""))
+            ):
                 fp += format_apa(r) + "\n\n"
 
             st.session_state.full_integrated_paper = fp
             total_words = len(re.sub(r"\s", "", fp))
 
-            pt1, pt2, pt3, pt4, pt5 = st.tabs(["摘要", "致謝", "章節銜接", "全文預覽", "邏輯診斷"])
+            pt1, pt2, pt3, pt4, pt5 = st.tabs([
+                "摘要", "致謝", "章節銜接", "全文預覽", "邏輯診斷"
+            ])
 
-            with pt1: st.markdown(st.session_state.integrated_abstract)
-            with pt2: st.markdown(st.session_state.integrated_ack)
+            with pt1:
+                st.markdown(st.session_state.integrated_abstract)
+
+            with pt2:
+                st.markdown(st.session_state.integrated_ack)
+
             with pt3:
                 for ch, trans in transitions.items():
-                    with st.expander(ch + " → 下一章"): st.markdown(trans)
+                    with st.expander(ch + " → 下一章"):
+                        st.markdown(trans)
+
             with pt4:
                 st.metric(
-                    "全文字數", str(total_words) + " 字",
-                    delta="達標" if total_words >= 20000 else "還差 " + str(20000 - total_words) + " 字"
+                    "全文字數",
+                    str(total_words) + " 字",
+                    delta=(
+                        "達標" if total_words >= 20000
+                        else "還差 " + str(20000 - total_words) + " 字"
+                    )
                 )
                 st.markdown(fp[:10000] + "\n\n...（請下載完整版）")
+
             with pt5:
                 if st.button("執行邏輯診斷", key="diag"):
                     with st.spinner("AI 審查中..."):
@@ -755,7 +872,7 @@ elif st.session_state.step == 4:
                             "【" + ch + "】" + st.session_state.content.get(ch, "")[:1200]
                             for ch in done_chapters
                         ])
-                        diag_prompt = (
+                        st.markdown(call_ai(
                             "你是嚴格的論文口試委員，從 5 個維度評分（1-10分）：\n"
                             "1. 研究問題與結論對應性\n"
                             "2. 文獻與方法一致性\n"
@@ -764,27 +881,15 @@ elif st.session_state.step == 4:
                             "5. 學術語氣一致性\n"
                             "題目：" + st.session_state.final_title + "\n"
                             "各章：" + full_text[:8000] + "\n"
-                            "請輸出完整診斷報告（Markdown）："
-                        )
-                        st.markdown(call_ai(diag_prompt, max_tokens=3000))
+                            "請輸出完整診斷報告（Markdown）：",
+                            max_tokens=3000
+                        ))
 
             st.divider()
             st.subheader("📥 下載完整論文")
             d1, d2 = st.columns(2)
             with d1:
                 st.download_button(
-                    "📄 下載完整論文 (.md)", fp,
-                    file_name=st.session_state.final_title[:30] + "_完整版.md",
-                    mime="text/markdown", type="primary"
-                )
-            with d2:
-                st.download_button(
-                    "📝 下載完整論文 (.txt)", fp,
-                    file_name=st.session_state.final_title[:30] + "_完整版.txt",
-                    mime="text/plain"
-                )
-
-    if st.button("上一步（大綱）"):
-        st.session_state.step = 3; st.rerun()
-
-    st.caption("免責聲明：AI 生成內容僅供學術練習，使用前請自行查核文獻真實性。")
+                    "📄 下載完整論文 (.md)",
+                    fp,
+                    file_name=st.session_state.final_title[:30] + "_完整版
