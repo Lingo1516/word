@@ -1,8 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - Ollama 本地版（修正版）                   ║
+# ║     論文寫作助手 - 雲端版（Groq 免費 / Gemini）              ║
+# ║     存成 thesis.py                                           ║
 # ╚══════════════════════════════════════════════════════════════╝
-# 存成 thesis.py，執行：python3 -m streamlit run thesis.py
-#
 # requirements.txt：
 #   streamlit
 #   google-generativeai
@@ -38,31 +37,79 @@ defaults = {
     "integrated_transitions": {},
     "polished_ch1": "",
     "full_integrated_paper": "",
-    "ai_mode": "Ollama（本地）",
+    "ai_mode": "Groq（免費雲端）",
+    "groq_key": "",
     "gemini_key": "",
     "ollama_url": "http://127.0.0.1:11434",
-    "ollama_model": "qwen2.5:7b"
+    "ollama_model": "qwen2.5:0.5b"
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ─────────────────────────────────────────────
-# 工具函數：強制換掉 localhost
-# ─────────────────────────────────────────────
-def fix_url(url):
-    return url.replace("localhost", "127.0.0.1")
-
-# ─────────────────────────────────────────────
 # AI 呼叫函數
 # ─────────────────────────────────────────────
 def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體中文回答。", max_tokens=6000):
-    ai_mode      = st.session_state.ai_mode
-    ollama_url   = fix_url(st.session_state.ollama_url)
+    ai_mode    = st.session_state.ai_mode
+    groq_key   = st.session_state.groq_key
+    gemini_key = st.session_state.gemini_key
+    ollama_url = st.session_state.ollama_url
     ollama_model = st.session_state.ollama_model
-    gemini_key   = st.session_state.gemini_key
 
-    if ai_mode == "Ollama（本地）":
+    # ── Groq ──
+    if ai_mode == "Groq（免費雲端）":
+        if not groq_key:
+            return "⚠️ 請在側邊欄輸入 Groq API Key（免費申請：https://console.groq.com）"
+        try:
+            res = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer " + groq_key,
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": sys_role},
+                        {"role": "user",   "content": prompt}
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.7
+                },
+                timeout=120
+            )
+            if res.status_code == 200:
+                return res.json()["choices"][0]["message"]["content"]
+            elif res.status_code == 429:
+                return "❌ Groq 今日額度已用完，請明天再試或改用 Gemini"
+            return "❌ Groq 錯誤：HTTP " + str(res.status_code) + "\n" + res.text[:200]
+        except requests.exceptions.Timeout:
+            return "❌ Groq 連線逾時，請重試"
+        except Exception as e:
+            return "❌ Groq 錯誤：" + str(e)[:200]
+
+    # ── Gemini ──
+    elif ai_mode == "Gemini":
+        if not gemini_key:
+            return "⚠️ 請在側邊欄輸入 Gemini API Key"
+        try:
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel(
+                "gemini-2.0-flash",
+                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
+            )
+            return model.generate_content(sys_role + "\n\n" + prompt).text
+        except Exception as e:
+            err = str(e)
+            if "429" in err:
+                return "❌ Gemini 今日額度已用完，請改用 Groq"
+            elif "API_KEY_INVALID" in err or "invalid" in err.lower():
+                return "❌ Gemini API Key 無效"
+            return "❌ Gemini 錯誤：" + err[:150]
+
+    # ── Ollama ──
+    elif ai_mode == "Ollama（本地）":
         try:
             res = requests.post(
                 ollama_url.rstrip("/") + "/api/chat",
@@ -82,26 +129,8 @@ def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體�
             return "❌ Ollama 錯誤：HTTP " + str(res.status_code)
         except requests.exceptions.ConnectionError:
             return "❌ 無法連線到 Ollama，請確認 ollama serve 有在執行"
-        except requests.exceptions.Timeout:
-            return "❌ Ollama 回應逾時，請換較小的模型（gemma3:4b）"
         except Exception as e:
-            return "❌ 錯誤：" + str(e)[:200]
-
-    elif ai_mode == "Gemini":
-        if not gemini_key:
-            return "⚠️ 請輸入 Gemini API Key"
-        try:
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
-            )
-            return model.generate_content(sys_role + "\n\n" + prompt).text
-        except Exception as e:
-            err = str(e)
-            if "429" in err:
-                return "❌ Gemini 今日額度已用完，請改用 Ollama"
-            return "❌ Gemini 錯誤：" + err[:150]
+            return "❌ Ollama 錯誤：" + str(e)[:200]
 
 # ─────────────────────────────────────────────
 # 文獻抓取
@@ -218,7 +247,7 @@ def format_apa(ref):
         vol   = ref.get("volume", "")
         pages = ref.get("pages", "")
         apa   = authors + "（" + str(year) + "）。" + title + "。*" + venue + "*"
-        if vol: apa += "，" + vol
+        if vol:   apa += "，" + vol
         if pages: apa += "，" + pages
         return apa + "。"
     apa = authors + " (" + str(year) + "). " + title + ". *" + venue + "*."
@@ -395,13 +424,13 @@ def generate_docx(full_text, title):
     for line in full_text.split("\n"):
         line = line.strip()
         if not line: continue
-        if line.startswith("# "): doc.add_heading(line[2:], level=1)
+        if line.startswith("# "):    doc.add_heading(line[2:], level=1)
         elif line.startswith("## "): doc.add_heading(line[3:], level=2)
-        elif line.startswith("### "): doc.add_heading(line[4:], level=3)
+        elif line.startswith("### "):doc.add_heading(line[4:], level=3)
         elif line.startswith("> "): doc.add_paragraph(line[2:], style="Intense Quote")
         else:
             clean = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
-            clean = re.sub(r"\*(.+?)\*", r"\1", clean)
+            clean = re.sub(r"\*(.+?)\*",     r"\1", clean)
             doc.add_paragraph(clean)
     bio = io.BytesIO()
     doc.save(bio)
@@ -416,26 +445,32 @@ chapters_list = list(CHAPTER_CONFIG.keys())
 with st.sidebar:
     st.title("⚙️ 設定")
     st.header("🤖 AI 模型")
-    st.session_state.ai_mode = st.radio("選擇 AI 引擎", ["Ollama（本地）", "Gemini"], index=0)
 
-    if st.session_state.ai_mode == "Ollama（本地）":
-        st.session_state.ollama_url   = st.text_input("Ollama 伺服器位址", value=st.session_state.ollama_url)
-        st.session_state.ollama_model = st.text_input("模型名稱", value=st.session_state.ollama_model)
-        if st.button("🔌 測試連線"):
-            try:
-                url = fix_url(st.session_state.ollama_url)
-                r   = requests.get(url.rstrip("/") + "/api/tags", timeout=5)
-                if r.status_code == 200:
-                    models = [m["name"] for m in r.json().get("models", [])]
-                    st.success("✅ 連線成功！\n" + "\n".join(models) if models else "連線成功但無模型")
-                else:
-                    st.error("連線失敗 HTTP " + str(r.status_code))
-            except Exception as e:
-                st.error("無法連線：" + str(e))
-        st.caption("📌 請先執行：ollama serve")
+    st.session_state.ai_mode = st.radio(
+        "選擇 AI 引擎",
+        ["Groq（免費雲端）", "Gemini", "Ollama（本地）"],
+        index=0
+    )
+
+    if st.session_state.ai_mode == "Groq（免費雲端）":
+        st.session_state.groq_key = st.text_input(
+            "Groq API Key", value=st.session_state.groq_key,
+            type="password", placeholder="貼上 Groq API Key"
+        )
+        st.caption("🔗 免費申請：https://console.groq.com")
+        st.caption("模型：llama-3.3-70b-versatile（免費）")
+
+    elif st.session_state.ai_mode == "Gemini":
+        st.session_state.gemini_key = st.text_input(
+            "Gemini API Key", value=st.session_state.gemini_key,
+            type="password", placeholder="貼上 Gemini API Key"
+        )
+        st.caption("🔗 免費申請：https://aistudio.google.com/app/apikey")
+
     else:
-        st.session_state.gemini_key = st.text_input("Gemini API Key", value=st.session_state.gemini_key, type="password")
-        st.caption("🔗 https://aistudio.google.com/app/apikey")
+        st.session_state.ollama_url   = st.text_input("Ollama 位址", value=st.session_state.ollama_url)
+        st.session_state.ollama_model = st.text_input("模型名稱",    value=st.session_state.ollama_model)
+        st.caption("📌 請先執行：ollama serve")
 
     st.divider()
     st.header("📐 研究方法論")
@@ -466,7 +501,7 @@ with st.sidebar:
 # 主畫面
 # ─────────────────────────────────────────────
 st.title("🎓 論文寫作助手")
-st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 ｜ 使用：" + st.session_state.ai_mode + "（" + st.session_state.ollama_model + "）")
+st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 ｜ 使用：" + st.session_state.ai_mode)
 
 prog  = ["① 題目", "② 文獻", "③ 模型", "④ 大綱", "⑤ 寫作＆整合"]
 pcols = st.columns(5)
@@ -492,8 +527,10 @@ if st.session_state.step == 0:
                     "關鍵字：" + keywords + "，研究方法：" + (mcdm_method or case_method or research_mode) + "。\n"
                     "請產生 5 個繁體中文碩士論文題目，每個附說明研究方向與貢獻。"
                 ))
-    title_input = st.text_input("確認最終題目", value=st.session_state.final_title,
-                                 placeholder="例如：人才培訓教育訓練對組織行為的影響")
+    title_input = st.text_input(
+        "確認最終題目", value=st.session_state.final_title,
+        placeholder="例如：人才培訓教育訓練對組織行為的影響"
+    )
     if st.button("下一步 → 自動搜尋文獻", type="primary"):
         if title_input:
             st.session_state.final_title = title_input
@@ -522,7 +559,8 @@ elif st.session_state.step == 1:
                 + r.get("title", "") + "：" + r.get("abstract", "") for r in refs
             ])
             st.session_state.refs_summary = call_ai(
-                "請歸納以下文獻重點，說明各篇理論觀點、研究變數、主要發現：\n" + abstracts, max_tokens=4000)
+                "請歸納以下文獻重點，說明各篇理論觀點、研究變數、主要發現：\n" + abstracts,
+                max_tokens=4000)
         st.rerun()
 
     if st.session_state.refs_list:
@@ -557,7 +595,7 @@ elif st.session_state.step == 2:
     st.subheader("步驟 3：建立 " + current_method + " 分析模型")
     st.info("題目：" + st.session_state.final_title)
     if st.button("執行 " + current_method + " 模擬", type="primary"):
-        with st.spinner("建構模型中（需要 1-3 分鐘）..."):
+        with st.spinner("建構模型中..."):
             result = run_simulation(st.session_state.refs_summary, mcdm_method, case_method, criteria_size, dim_size)
             if result:
                 st.session_state.sim_data = result
@@ -623,12 +661,13 @@ elif st.session_state.step == 4:
     st.subheader("步驟 5：逐章撰寫 + 整合成完整論文")
     st.info("題目：" + st.session_state.final_title)
     done_count = sum(1 for ch in chapters_list if ch in st.session_state.content)
-    st.progress(done_count / len(chapters_list), text="已完成 " + str(done_count) + "/" + str(len(chapters_list)) + " 章")
+    st.progress(done_count / len(chapters_list),
+                text="已完成 " + str(done_count) + "/" + str(len(chapters_list)) + " 章")
 
     if st.button("⚡ 一鍵撰寫所有章節", type="primary"):
         for ch in chapters_list:
             if ch not in st.session_state.content:
-                with st.spinner("撰寫 " + ch + "（需要 2-5 分鐘）..."):
+                with st.spinner("撰寫 " + ch + "..."):
                     st.session_state.content[ch] = write_chapter(
                         ch, st.session_state.final_title, st.session_state.outline,
                         st.session_state.refs_list, st.session_state.sim_data)
@@ -643,7 +682,7 @@ elif st.session_state.step == 4:
             cb1, cb2 = st.columns(2)
             with cb1:
                 if st.button("撰寫本章", key="w" + str(i), type="primary"):
-                    with st.spinner("撰寫 " + ch + "（需要 2-5 分鐘）..."):
+                    with st.spinner("撰寫 " + ch + "..."):
                         st.session_state.content[ch] = write_chapter(
                             ch, st.session_state.final_title, st.session_state.outline,
                             st.session_state.refs_list, st.session_state.sim_data)
@@ -671,22 +710,21 @@ elif st.session_state.step == 4:
             with st.spinner("生成摘要..."):
                 ch_sum = "\n".join(["【" + ch + "】" + st.session_state.content.get(ch, "")[:800] for ch in done_chapters])
                 st.session_state.integrated_abstract = call_ai(
-                    "根據以下論文各章，撰寫：\n1. 繁體中文摘要（400-500字）：目的、方法、結果、結論、關鍵詞（5個）\n"
-                    "2. English Abstract（200-250 words）\n題目：" + st.session_state.final_title + "\n各章：" + ch_sum,
-                    max_tokens=2000)
+                    "根據以下論文各章，撰寫：\n1. 繁體中文摘要（400-500字）\n2. English Abstract（200-250 words）\n"
+                    "題目：" + st.session_state.final_title + "\n各章：" + ch_sum, max_tokens=2000)
             with st.spinner("生成章節銜接..."):
                 transitions = {}
                 for i in range(len(done_chapters) - 1):
                     now, nxt = done_chapters[i], done_chapters[i + 1]
                     transitions[now] = call_ai(
-                        "撰寫150字章節過渡段（繁體中文學術語氣）：\n總結「" + now + "」-> 銜接「" + nxt + "」\n"
+                        "撰寫150字章節過渡段（繁體中文學術語氣）：總結「" + now + "」-> 銜接「" + nxt + "」\n"
                         + now + "末段：" + st.session_state.content.get(now, "")[-300:] + "\n"
                         + nxt + "首段：" + st.session_state.content.get(nxt, "")[:300], max_tokens=500)
-                    time.sleep(1)
+                    time.sleep(0.5)
                 st.session_state.integrated_transitions = transitions
             with st.spinner("第一章潤飾..."):
                 st.session_state.polished_ch1 = call_ai(
-                    "請對以下第一章進行學術語氣潤飾（「我」->「本研究」，補充連接詞，統一引用格式）：\n"
+                    "請對以下第一章進行學術語氣潤飾（「我」->「本研究」）：\n"
                     + st.session_state.content.get("第一章 緒論", "")[:4000], max_tokens=5000)
             with st.spinner("生成致謝辭..."):
                 st.session_state.integrated_ack = call_ai(
@@ -734,8 +772,8 @@ elif st.session_state.step == 4:
                         full_text = "\n\n".join(["【" + ch + "】" + st.session_state.content.get(ch, "")[:1200] for ch in done_chapters])
                         st.markdown(call_ai(
                             "你是嚴格的論文口試委員，從 5 個維度評分（1-10分）：\n"
-                            "1. 研究問題與結論對應性\n2. 文獻與方法一致性\n3. 方法與結果一致性\n"
-                            "4. 章節銜接流暢度\n5. 學術語氣一致性\n"
+                            "1. 研究問題與結論對應性\n2. 文獻與方法一致性\n"
+                            "3. 方法與結果一致性\n4. 章節銜接流暢度\n5. 學術語氣一致性\n"
                             "題目：" + st.session_state.final_title + "\n各章：" + full_text[:8000] + "\n請輸出完整診斷報告（Markdown）：",
                             max_tokens=3000))
 
@@ -746,10 +784,12 @@ elif st.session_state.step == 4:
                 st.download_button("📄 下載 Markdown (.md)", data=fp,
                                    file_name=st.session_state.final_title[:30] + "_完整版.md", mime="text/markdown")
             with d2:
-                st.download_button("📝 下載純文字 (.txt)", data=fp.replace("**","").replace("*","").replace("#",""),
+                st.download_button("📝 下載純文字 (.txt)",
+                                   data=fp.replace("**","").replace("*","").replace("#",""),
                                    file_name=st.session_state.final_title[:30] + "_完整版.txt", mime="text/plain")
             with d3:
-                st.download_button("📘 下載 Word (.docx)", data=generate_docx(fp, st.session_state.final_title),
+                st.download_button("📘 下載 Word (.docx)",
+                                   data=generate_docx(fp, st.session_state.final_title),
                                    file_name=st.session_state.final_title[:30] + "_完整版.docx",
                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
