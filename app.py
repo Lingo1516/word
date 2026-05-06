@@ -6,6 +6,7 @@
 #   google-generativeai
 #   requests
 #   pandas
+#   python-docx
 
 import streamlit as st
 import google.generativeai as genai
@@ -13,7 +14,9 @@ import requests
 import json
 import re
 import time
+import io
 import pandas as pd
+from docx import Document
 
 # ─────────────────────────────────────────────
 # 唯一需要設定的地方：貼上你的 Gemini Key
@@ -383,6 +386,34 @@ def write_chapter(chapter_name, title, outline, refs_list, sim_data):
         result += "\n\n" + supplement
 
     return result
+
+
+# ─────────────────────────────────────────────
+# Word 輸出函數
+# ─────────────────────────────────────────────
+def generate_docx(full_text, title):
+    doc = Document()
+    doc.add_heading(title, level=0)
+    for line in full_text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("# "):
+            doc.add_heading(line[2:], level=1)
+        elif line.startswith("## "):
+            doc.add_heading(line[3:], level=2)
+        elif line.startswith("### "):
+            doc.add_heading(line[4:], level=3)
+        elif line.startswith("> "):
+            doc.add_paragraph(line[2:], style="Intense Quote")
+        else:
+            clean = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+            clean = re.sub(r"\*(.+?)\*", r"\1", clean)
+            doc.add_paragraph(clean)
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio
 
 
 # ─────────────────────────────────────────────
@@ -800,7 +831,7 @@ elif st.session_state.step == 4:
             st.rerun()
 
         if st.session_state.integrated_abstract:
-            # 組合全文
+            # ── 組合全文 ──
             fp  = "# " + st.session_state.final_title + "\n\n---\n\n"
             fp += "## 致謝\n\n" + st.session_state.integrated_ack + "\n\n---\n\n"
             fp += "## 摘要\n\n" + st.session_state.integrated_abstract + "\n\n---\n\n"
@@ -859,7 +890,7 @@ elif st.session_state.step == 4:
                     "全文字數",
                     str(total_words) + " 字",
                     delta=(
-                        "達標" if total_words >= 20000
+                        "達標 🎉" if total_words >= 20000
                         else "還差 " + str(20000 - total_words) + " 字"
                     )
                 )
@@ -885,11 +916,39 @@ elif st.session_state.step == 4:
                             max_tokens=3000
                         ))
 
+            # ── 下載區 ──
             st.divider()
             st.subheader("📥 下載完整論文")
-            d1, d2 = st.columns(2)
+            d1, d2, d3 = st.columns(3)
+
             with d1:
                 st.download_button(
-                    "📄 下載完整論文 (.md)",
-                    fp,
-                    file_name=st.session_state.final_title[:30] + "_完整版
+                    label="📄 下載 Markdown (.md)",
+                    data=fp,
+                    file_name=st.session_state.final_title[:30] + "_完整版.md",
+                    mime="text/markdown"
+                )
+
+            with d2:
+                txt_content = fp.replace("**", "").replace("*", "").replace("#", "")
+                st.download_button(
+                    label="📝 下載純文字 (.txt)",
+                    data=txt_content,
+                    file_name=st.session_state.final_title[:30] + "_完整版.txt",
+                    mime="text/plain"
+                )
+
+            with d3:
+                docx_bio = generate_docx(fp, st.session_state.final_title)
+                st.download_button(
+                    label="📘 下載 Word (.docx)",
+                    data=docx_bio,
+                    file_name=st.session_state.final_title[:30] + "_完整版.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+
+    # ── 返回按鈕 ──
+    st.divider()
+    if st.button("↩️ 返回上一步（大綱）"):
+        st.session_state.step = 3
+        st.rerun()
