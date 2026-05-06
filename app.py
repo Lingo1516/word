@@ -1,5 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - 免設定版（內建 Gemini 2.0）              ║
+# ║     論文寫作助手 - 完整版                                    ║
+# ║     支援 Gemini API / Ollama 本地模型                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 # requirements.txt：
 #   streamlit
@@ -19,12 +20,6 @@ import pandas as pd
 from docx import Document
 
 # ─────────────────────────────────────────────
-# 唯一需要設定的地方：貼上你的 Gemini Key
-# 申請免費 Key：https://aistudio.google.com/app/apikey
-# ─────────────────────────────────────────────
-GEMINI_API_KEY = "YOUR_GEMINI_KEY_HERE"
-
-# ─────────────────────────────────────────────
 # 頁面設定
 # ─────────────────────────────────────────────
 st.set_page_config(
@@ -34,25 +29,59 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# AI 呼叫函數
+# AI 呼叫函數（支援 Gemini / Ollama）
 # ─────────────────────────────────────────────
 def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體中文回答。", max_tokens=6000):
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            "gemini-2.0-flash",
-            generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
-        )
-        return model.generate_content(sys_role + "\n\n" + prompt).text
-    except Exception as e:
-        err = str(e)
-        if "429" in err:
-            return "今日免費額度已用完，請明天再試（台灣時間每天早上 8:00 重置）"
-        elif "API_KEY_INVALID" in err or "invalid" in err.lower():
-            return "API Key 無效，請確認 GEMINI_API_KEY 是否正確"
-        elif "404" in err:
-            return "模型不存在，請確認模型名稱"
-        return "發生錯誤：" + err[:150]
+    ai_mode      = st.session_state.get("ai_mode", "Gemini")
+    gemini_key   = st.session_state.get("gemini_key", "")
+    ollama_url   = st.session_state.get("ollama_url", "http://localhost:11434")
+    ollama_model = st.session_state.get("ollama_model", "llama3")
+
+    # ── Gemini ──
+    if ai_mode == "Gemini":
+        if not gemini_key:
+            return "⚠️ 請在側邊欄輸入 Gemini API Key"
+        try:
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel(
+                "gemini-2.0-flash",
+                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
+            )
+            return model.generate_content(sys_role + "\n\n" + prompt).text
+        except Exception as e:
+            err = str(e)
+            if "429" in err:
+                return "今日免費額度已用完，請明天再試（台灣時間每天早上 8:00 重置）"
+            elif "API_KEY_INVALID" in err or "invalid" in err.lower():
+                return "API Key 無效，請確認是否正確"
+            elif "404" in err:
+                return "模型不存在，請確認模型名稱"
+            return "Gemini 錯誤：" + err[:150]
+
+    # ── Ollama ──
+    elif ai_mode == "Ollama（本地）":
+        try:
+            res = requests.post(
+                ollama_url.rstrip("/") + "/api/chat",
+                json={
+                    "model": ollama_model,
+                    "messages": [
+                        {"role": "system", "content": sys_role},
+                        {"role": "user",   "content": prompt}
+                    ],
+                    "stream": False,
+                    "options": {"num_predict": max_tokens}
+                },
+                timeout=180
+            )
+            if res.status_code == 200:
+                return res.json()["message"]["content"]
+            else:
+                return "Ollama 錯誤：HTTP " + str(res.status_code) + "\n" + res.text[:200]
+        except requests.exceptions.ConnectionError:
+            return "❌ 無法連線到 Ollama，請確認：\n1. Ollama 是否已啟動（ollama serve）\n2. URL 是否正確"
+        except Exception as e:
+            return "Ollama 錯誤：" + str(e)[:150]
 
 
 # ─────────────────────────────────────────────
@@ -121,7 +150,7 @@ def fetch_crossref(query, limit=10, year_from=2018):
                 ])
                 if len(ar) > 3:
                     authors += " et al."
-                pub = item.get("published", {}).get("date-parts", [[""]])
+                pub  = item.get("published", {}).get("date-parts", [[""]])
                 year = pub[0][0] if pub and pub[0] else ""
                 abstract = re.sub(r"<[^>]+>", "", item.get("abstract", ""))[:500]
                 results.append({
@@ -157,12 +186,7 @@ def fetch_chinese_refs(topic, count=10, year_from=2018):
     try:
         data = json.loads(res)
         for item in data:
-            item.update({
-                "lang": "zh",
-                "doi": "",
-                "venue": item.get("journal", ""),
-                "citations": 0
-            })
+            item.update({"lang": "zh", "doi": "", "venue": item.get("journal", ""), "citations": 0})
         return data
     except Exception:
         match = re.search(r"\[.*\]", res, re.DOTALL)
@@ -170,12 +194,7 @@ def fetch_chinese_refs(topic, count=10, year_from=2018):
             try:
                 data = json.loads(match.group(0))
                 for item in data:
-                    item.update({
-                        "lang": "zh",
-                        "doi": "",
-                        "venue": item.get("journal", ""),
-                        "citations": 0
-                    })
+                    item.update({"lang": "zh", "doi": "", "venue": item.get("journal", ""), "citations": 0})
                 return data
             except Exception:
                 pass
@@ -246,7 +265,7 @@ def run_simulation(refs_summary, m_method, c_method, c_n, d_n):
         "文獻摘要：" + refs_summary[:8000]
     )
     try:
-        res = call_ai(prompt, sys_role="Output ONLY valid JSON. No markdown.", max_tokens=5000)
+        res     = call_ai(prompt, sys_role="Output ONLY valid JSON. No markdown.", max_tokens=5000)
         cleaned = re.sub(r"^```json\s*|^```\s*|```\s*$", "", res.strip(), flags=re.MULTILINE)
         try:
             return json.loads(cleaned)
@@ -274,7 +293,7 @@ CHAPTER_CONFIG = {
         "sections": ["研究背景與動機", "研究目的", "研究問題", "研究範圍與限制", "論文架構"],
         "instruction": (
             "目標 4000 字以上。\n"
-            "1.1 研究背景與動機（800字）：宏觀趨勢->研究主題->實務問題->研究缺口，每論點引用（作者，年份）\n"
+            "1.1 研究背景與動機（800字）：宏觀趨勢->研究主題->實務問題->研究缺口\n"
             "1.2 研究目的（400字）：4-5個具體目的，邏輯遞進\n"
             "1.3 研究問題（400字）：4-5個具體可操作的研究問題\n"
             "1.4 研究範圍與限制（400字）：研究對象、範圍、CMV問題\n"
@@ -286,9 +305,9 @@ CHAPTER_CONFIG = {
         "sections": ["理論基礎", "相關文獻回顧", "研究假設", "文獻總結與研究缺口"],
         "instruction": (
             "目標 6000 字以上。\n"
-            "2.1 理論基礎（1500字）：3-4個核心理論，每個：起源->核心主張->與本研究連結\n"
-            "2.2 相關文獻回顧（2500字）：每個變數一小節，各引4-5篇，每篇150字\n"
-            "2.3 研究假設（800字）：H1-H6，每個：假設陳述->文獻依據->預期方向\n"
+            "2.1 理論基礎（1500字）：3-4個核心理論，起源->核心主張->與本研究連結\n"
+            "2.2 相關文獻回顧（2500字）：每個變數一小節，各引4-5篇\n"
+            "2.3 研究假設（800字）：H1-H6，假設陳述->文獻依據->預期方向\n"
             "2.4 文獻總結與研究缺口（600字）：Markdown比較表格 + 3-4個研究缺口"
         )
     },
@@ -300,8 +319,8 @@ CHAPTER_CONFIG = {
             "3.1 研究架構（600字）：自變數->中介->依變數，對應H1-H6\n"
             "3.2 研究設計（600字）：量化+質性混合方法理由，三角驗證\n"
             "3.3 研究變數與操作型定義（1000字）：Markdown表格\n"
-            "3.4 資料收集方法（700字）：問卷對象、樣本數依據、抽樣方式、訪談程序\n"
-            "3.5 資料分析方法（1500字）：描述統計->信度->CFA->SEM；質性主題分析六步驟\n"
+            "3.4 資料收集方法（700字）：問卷對象、樣本數依據、抽樣方式\n"
+            "3.5 資料分析方法（1500字）：描述統計->信度->CFA->SEM\n"
             "3.6 研究倫理（200字）：知情同意、匿名保護"
         )
     },
@@ -310,10 +329,10 @@ CHAPTER_CONFIG = {
         "sections": ["樣本描述統計", "信效度分析", "研究假設驗證", "質性訪談結果", "綜合討論"],
         "instruction": (
             "目標 6000 字以上。\n"
-            "4.1 樣本描述統計（800字）：Markdown表格（性別、年齡、教育、年資、產業）\n"
+            "4.1 樣本描述統計（800字）：Markdown表格（性別、年齡、教育、年資）\n"
             "4.2 信效度分析（800字）：表格 α|AVE|CR|判斷 + HTMT矩陣\n"
-            "4.3 研究假設驗證（2000字）：表格 假設|路徑|β|t值|p值|結果 + 逐一解釋\n"
-            "4.4 質性訪談結果（1500字）：受訪者描述(A-F) + 3-4主題 + 引言 + 三角驗證\n"
+            "4.3 研究假設驗證（2000字）：表格 假設|路徑|β|t值|p值|結果\n"
+            "4.4 質性訪談結果（1500字）：受訪者描述(A-F) + 3-4主題 + 引言\n"
             "4.5 綜合討論（800字）：量化質性整合 + 與文獻對話"
         )
     },
@@ -443,12 +462,59 @@ chapters_list = list(CHAPTER_CONFIG.keys())
 # 側邊欄
 # ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("研究設定")
-    st.success("✅ AI 已內建，直接使用！")
-    st.caption("由 Google Gemini 2.0 Flash 驅動（免費版）")
+    st.title("⚙️ 設定")
+
+    # ── AI 模型設定 ──
+    st.header("🤖 AI 模型")
+    ai_mode = st.radio(
+        "選擇 AI 引擎",
+        ["Gemini", "Ollama（本地）"],
+        key="ai_mode"
+    )
+
+    if ai_mode == "Gemini":
+        st.text_input(
+            "Gemini API Key",
+            type="password",
+            placeholder="貼上你的 API Key",
+            key="gemini_key"
+        )
+        st.caption("🔗 免費申請：https://aistudio.google.com/app/apikey")
+
+    else:
+        st.text_input(
+            "Ollama 伺服器位址",
+            value="http://localhost:11434",
+            key="ollama_url"
+        )
+        st.text_input(
+            "模型名稱",
+            value="llama3",
+            placeholder="llama3 / gemma3 / mistral / qwen2.5",
+            key="ollama_model"
+        )
+        if st.button("🔌 測試 Ollama 連線"):
+            try:
+                r = requests.get(
+                    st.session_state.ollama_url.rstrip("/") + "/api/tags",
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    models = [m["name"] for m in r.json().get("models", [])]
+                    if models:
+                        st.success("✅ 連線成功！\n已安裝模型：\n" + "\n".join(models))
+                    else:
+                        st.warning("連線成功，但尚未下載任何模型\n請執行：ollama pull llama3")
+                else:
+                    st.error("連線失敗：HTTP " + str(r.status_code))
+            except Exception as e:
+                st.error("無法連線：" + str(e))
+        st.caption("📌 請先執行：ollama serve")
+
     st.divider()
 
-    st.header("研究方法論")
+    # ── 研究方法論 ──
+    st.header("📐 研究方法論")
     research_mode = st.radio(
         "研究路徑",
         ["MCDM（量化/決策）", "混合方法（量化+質性）", "Case Study（質性/個案）"]
@@ -487,7 +553,9 @@ with st.sidebar:
         dim_size      = 3
 
     st.divider()
-    st.header("文獻設定")
+
+    # ── 文獻設定 ──
+    st.header("📚 文獻設定")
     zh_paper_count = st.slider("中文文獻篇數", 5, 20, 10)
     en_paper_count = st.slider("英文文獻篇數", 5, 20, 10)
     year_from      = st.number_input("文獻最早年份", value=2018, step=1)
@@ -496,7 +564,7 @@ with st.sidebar:
 # 主畫面
 # ─────────────────────────────────────────────
 st.title("🎓 論文寫作助手")
-st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 × 由 Google Gemini 2.0 驅動")
+st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 × 支援 Gemini / Ollama")
 
 prog  = ["① 題目", "② 文獻", "③ 模型", "④ 大綱", "⑤ 寫作＆整合"]
 pcols = st.columns(5)
@@ -827,7 +895,7 @@ elif st.session_state.step == 4:
                     max_tokens=800
                 )
 
-            st.success("整合完成！")
+            st.success("整合完成！🎉")
             st.rerun()
 
         if st.session_state.integrated_abstract:
@@ -928,7 +996,6 @@ elif st.session_state.step == 4:
                     file_name=st.session_state.final_title[:30] + "_完整版.md",
                     mime="text/markdown"
                 )
-
             with d2:
                 txt_content = fp.replace("**", "").replace("*", "").replace("#", "")
                 st.download_button(
@@ -937,7 +1004,6 @@ elif st.session_state.step == 4:
                     file_name=st.session_state.final_title[:30] + "_完整版.txt",
                     mime="text/plain"
                 )
-
             with d3:
                 docx_bio = generate_docx(fp, st.session_state.final_title)
                 st.download_button(
