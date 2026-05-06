@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - 完整版                                    ║
-# ║     支援 Gemini API / Ollama 本地模型                        ║
+# ║     論文寫作助手 - Ollama 本地版                             ║
+# ║     預設使用 Ollama，可選切換 Gemini                         ║
 # ╚══════════════════════════════════════════════════════════════╝
 # requirements.txt：
 #   streamlit
@@ -29,37 +29,41 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# AI 呼叫函數（支援 Gemini / Ollama）
+# Session 初始化（必須放在最前面）
+# ─────────────────────────────────────────────
+defaults = {
+    "step": 0,
+    "final_title": "",
+    "refs_list": [],
+    "refs_summary": "",
+    "sim_data": None,
+    "outline": "",
+    "content": {},
+    "integrated_abstract": "",
+    "integrated_ack": "",
+    "integrated_transitions": {},
+    "polished_ch1": "",
+    "full_integrated_paper": "",
+    "ai_mode": "Ollama（本地）",
+    "gemini_key": "",
+    "ollama_url": "http://localhost:11434",
+    "ollama_model": "qwen2.5:7b"
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ─────────────────────────────────────────────
+# AI 呼叫函數
 # ─────────────────────────────────────────────
 def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體中文回答。", max_tokens=6000):
-    ai_mode      = st.session_state.get("ai_mode", "Gemini")
-    gemini_key   = st.session_state.get("gemini_key", "")
-    ollama_url   = st.session_state.get("ollama_url", "http://localhost:11434")
-    ollama_model = st.session_state.get("ollama_model", "llama3")
-
-    # ── Gemini ──
-    if ai_mode == "Gemini":
-        if not gemini_key:
-            return "⚠️ 請在側邊欄輸入 Gemini API Key"
-        try:
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
-            )
-            return model.generate_content(sys_role + "\n\n" + prompt).text
-        except Exception as e:
-            err = str(e)
-            if "429" in err:
-                return "今日免費額度已用完，請明天再試（台灣時間每天早上 8:00 重置）"
-            elif "API_KEY_INVALID" in err or "invalid" in err.lower():
-                return "API Key 無效，請確認是否正確"
-            elif "404" in err:
-                return "模型不存在，請確認模型名稱"
-            return "Gemini 錯誤：" + err[:150]
+    ai_mode      = st.session_state.ai_mode
+    gemini_key   = st.session_state.gemini_key
+    ollama_url   = st.session_state.ollama_url
+    ollama_model = st.session_state.ollama_model
 
     # ── Ollama ──
-    elif ai_mode == "Ollama（本地）":
+    if ai_mode == "Ollama（本地）":
         try:
             res = requests.post(
                 ollama_url.rstrip("/") + "/api/chat",
@@ -72,16 +76,42 @@ def call_ai(prompt, sys_role="你是一位嚴謹的學術專家，使用繁體�
                     "stream": False,
                     "options": {"num_predict": max_tokens}
                 },
-                timeout=180
+                timeout=300
             )
             if res.status_code == 200:
                 return res.json()["message"]["content"]
             else:
-                return "Ollama 錯誤：HTTP " + str(res.status_code) + "\n" + res.text[:200]
+                return "❌ Ollama 錯誤：HTTP " + str(res.status_code) + "\n" + res.text[:300]
         except requests.exceptions.ConnectionError:
-            return "❌ 無法連線到 Ollama，請確認：\n1. Ollama 是否已啟動（ollama serve）\n2. URL 是否正確"
+            return (
+                "❌ 無法連線到 Ollama！請確認：\n"
+                "1. 已執行 `ollama serve`\n"
+                "2. 伺服器位址正確（預設：http://localhost:11434）\n"
+                "3. 模型已下載（執行：ollama pull " + ollama_model + "）"
+            )
+        except requests.exceptions.Timeout:
+            return "❌ Ollama 回應逾時，請嘗試使用較小的模型"
         except Exception as e:
-            return "Ollama 錯誤：" + str(e)[:150]
+            return "❌ Ollama 錯誤：" + str(e)[:200]
+
+    # ── Gemini ──
+    elif ai_mode == "Gemini":
+        if not gemini_key:
+            return "⚠️ 請在側邊欄輸入 Gemini API Key"
+        try:
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel(
+                "gemini-2.0-flash",
+                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
+            )
+            return model.generate_content(sys_role + "\n\n" + prompt).text
+        except Exception as e:
+            err = str(e)
+            if "429" in err:
+                return "❌ Gemini 今日免費額度已用完，請改用 Ollama 或明天再試"
+            elif "API_KEY_INVALID" in err or "invalid" in err.lower():
+                return "❌ Gemini API Key 無效"
+            return "❌ Gemini 錯誤：" + err[:150]
 
 
 # ─────────────────────────────────────────────
@@ -143,7 +173,7 @@ def fetch_crossref(query, limit=10, year_from=2018):
                 title = item.get("title", [""])[0] if item.get("title") else ""
                 if not title:
                     continue
-                ar = item.get("author", [])
+                ar      = item.get("author", [])
                 authors = ", ".join([
                     a.get("family", "") + ", " + a.get("given", "")
                     for a in ar[:3]
@@ -182,7 +212,7 @@ def fetch_chinese_refs(topic, count=10, year_from=2018):
         '"journal":"期刊名稱","volume":"38(2)","pages":"45-78",'
         '"abstract":"摘要50字以內"}]'
     )
-    res = call_ai(prompt, sys_role="Output ONLY valid JSON array.", max_tokens=3000)
+    res = call_ai(prompt, sys_role="Output ONLY valid JSON array. No other text.", max_tokens=3000)
     try:
         data = json.loads(res)
         for item in data:
@@ -234,8 +264,8 @@ def format_apa(ref):
 # 模型模擬
 # ─────────────────────────────────────────────
 def run_simulation(refs_summary, m_method, c_method, c_n, d_n):
-    used_method = m_method or c_method or "混合方法"
-    method_key  = used_method.split("（")[0].strip()
+    used_method  = m_method or c_method or "混合方法"
+    method_key   = used_method.split("（")[0].strip()
     method_instr = {
         "AHP":     "模擬 Saaty 1-9 成對比較矩陣，計算特徵向量權重，CR < 0.1。",
         "DEMATEL": "模擬 0-4 直接關係矩陣，計算中心度(D+R)與原因度(D-R)。",
@@ -245,27 +275,24 @@ def run_simulation(refs_summary, m_method, c_method, c_n, d_n):
     }.get(method_key, "模擬迴歸分析，計算標準化係數。")
 
     prompt = (
-        "你是 MCDM 與統計分析專家，方法：" + used_method + "。\n"
+        "你是 MCDM 與統計分析專家，使用方法：" + used_method + "。\n"
         "根據以下文獻摘要：\n"
         "1. 萃取 " + str(c_n) + " 個評估準則，歸納為 " + str(d_n) + " 個構面\n"
         "2. " + method_instr + "\n"
         "3. 模擬 3 家企業評分\n"
         "4. 生成合理統計數值（β、t、p、AVE、CR、α）\n\n"
-        "只輸出 JSON，格式：\n"
+        "只輸出 JSON，格式如下：\n"
         '{"final_hierarchy":[{"dimension_name":"構面名","dimension_code":"D1",'
-        '"contained_criteria":[{"criteria_name":"準則","criteria_code":"C1",'
-        '"reasoning":"說明"}]}],'
+        '"contained_criteria":[{"criteria_name":"準則","criteria_code":"C1","reasoning":"說明"}]}],'
         '"step4_simulation":{"method_used":"' + used_method + '",'
         '"weights":[{"criteria":"準則","dimension":"構面","weight":0.08,"rank":1}],'
-        '"regression":[{"hypothesis":"H1","path":"A->B","beta":0.43,'
-        '"t_value":5.21,"p_value":"<0.001","supported":true}],'
+        '"regression":[{"hypothesis":"H1","path":"A->B","beta":0.43,"t_value":5.21,"p_value":"<0.001","supported":true}],'
         '"reliability":[{"dimension":"構面","alpha":0.87,"AVE":0.62,"CR":0.88}],'
-        '"interview_themes":[{"theme":"主題一","description":"說明",'
-        '"quotes":["受訪者A（HR主管）表示：某某某"]}]}}\n\n'
+        '"interview_themes":[{"theme":"主題一","description":"說明","quotes":["受訪者A（HR主管）表示：某某某"]}]}}\n\n'
         "文獻摘要：" + refs_summary[:8000]
     )
     try:
-        res     = call_ai(prompt, sys_role="Output ONLY valid JSON. No markdown.", max_tokens=5000)
+        res     = call_ai(prompt, sys_role="Output ONLY valid JSON. No markdown fences.", max_tokens=5000)
         cleaned = re.sub(r"^```json\s*|^```\s*|```\s*$", "", res.strip(), flags=re.MULTILINE)
         try:
             return json.loads(cleaned)
@@ -293,7 +320,7 @@ CHAPTER_CONFIG = {
         "sections": ["研究背景與動機", "研究目的", "研究問題", "研究範圍與限制", "論文架構"],
         "instruction": (
             "目標 4000 字以上。\n"
-            "1.1 研究背景與動機（800字）：宏觀趨勢->研究主題->實務問題->研究缺口\n"
+            "1.1 研究背景與動機（800字）：宏觀趨勢->研究主題->實務問題->研究缺口，每論點引用（作者，年份）\n"
             "1.2 研究目的（400字）：4-5個具體目的，邏輯遞進\n"
             "1.3 研究問題（400字）：4-5個具體可操作的研究問題\n"
             "1.4 研究範圍與限制（400字）：研究對象、範圍、CMV問題\n"
@@ -306,7 +333,7 @@ CHAPTER_CONFIG = {
         "instruction": (
             "目標 6000 字以上。\n"
             "2.1 理論基礎（1500字）：3-4個核心理論，起源->核心主張->與本研究連結\n"
-            "2.2 相關文獻回顧（2500字）：每個變數一小節，各引4-5篇\n"
+            "2.2 相關文獻回顧（2500字）：每個變數一小節，各引4-5篇，每篇150字\n"
             "2.3 研究假設（800字）：H1-H6，假設陳述->文獻依據->預期方向\n"
             "2.4 文獻總結與研究缺口（600字）：Markdown比較表格 + 3-4個研究缺口"
         )
@@ -319,8 +346,8 @@ CHAPTER_CONFIG = {
             "3.1 研究架構（600字）：自變數->中介->依變數，對應H1-H6\n"
             "3.2 研究設計（600字）：量化+質性混合方法理由，三角驗證\n"
             "3.3 研究變數與操作型定義（1000字）：Markdown表格\n"
-            "3.4 資料收集方法（700字）：問卷對象、樣本數依據、抽樣方式\n"
-            "3.5 資料分析方法（1500字）：描述統計->信度->CFA->SEM\n"
+            "3.4 資料收集方法（700字）：問卷對象、樣本數依據、抽樣方式、訪談程序\n"
+            "3.5 資料分析方法（1500字）：描述統計->信度->CFA->SEM；質性主題分析六步驟\n"
             "3.6 研究倫理（200字）：知情同意、匿名保護"
         )
     },
@@ -329,10 +356,10 @@ CHAPTER_CONFIG = {
         "sections": ["樣本描述統計", "信效度分析", "研究假設驗證", "質性訪談結果", "綜合討論"],
         "instruction": (
             "目標 6000 字以上。\n"
-            "4.1 樣本描述統計（800字）：Markdown表格（性別、年齡、教育、年資）\n"
+            "4.1 樣本描述統計（800字）：Markdown表格（性別、年齡、教育、年資、產業）\n"
             "4.2 信效度分析（800字）：表格 α|AVE|CR|判斷 + HTMT矩陣\n"
-            "4.3 研究假設驗證（2000字）：表格 假設|路徑|β|t值|p值|結果\n"
-            "4.4 質性訪談結果（1500字）：受訪者描述(A-F) + 3-4主題 + 引言\n"
+            "4.3 研究假設驗證（2000字）：表格 假設|路徑|β|t值|p值|結果 + 逐一解釋\n"
+            "4.4 質性訪談結果（1500字）：受訪者描述(A-F) + 3-4主題 + 引言 + 三角驗證\n"
             "4.5 綜合討論（800字）：量化質性整合 + 與文獻對話"
         )
     },
@@ -369,7 +396,7 @@ def write_chapter(chapter_name, title, outline, refs_list, sim_data):
     elif "第二章" in chapter_name:
         context = "文獻庫：\n" + ref_abstracts + "\n\nAPA清單：\n" + apa_refs
     elif "第三章" in chapter_name:
-        context = "模型架構（請轉為學術文字，嚴禁貼JSON）：\n" + sim_json[:5000]
+        context = "模型架構（請轉為學術文字，嚴禁直接貼JSON）：\n" + sim_json[:5000]
     elif "第四章" in chapter_name:
         context = "模擬數據（請轉為學術分析與表格）：\n" + sim_json[:5000]
     else:
@@ -377,7 +404,7 @@ def write_chapter(chapter_name, title, outline, refs_list, sim_data):
 
     prompt = (
         "你是撰寫繁體中文學術論文的資深教授，專長為人力資源管理與組織行為學。\n\n"
-        "語氣範例（請模仿）：\n" + STYLE_EXAMPLE + "\n\n"
+        "語氣範例（請模仿此風格）：\n" + STYLE_EXAMPLE + "\n\n"
         "核心原則：\n"
         "1. 不使用「我」，用「本研究」「研究者」「本文」\n"
         "2. 每個論點後引用（作者，年份）\n"
@@ -393,7 +420,7 @@ def write_chapter(chapter_name, title, outline, refs_list, sim_data):
 
     result = call_ai(
         prompt,
-        sys_role="你是嚴謹的繁體中文學術論文教授，每次回應必須詳盡完整。",
+        sys_role="你是嚴謹的繁體中文學術論文教授，每次回應必須詳盡完整，不可省略任何小節。",
         max_tokens=6000
     )
 
@@ -435,27 +462,6 @@ def generate_docx(full_text, title):
     return bio
 
 
-# ─────────────────────────────────────────────
-# Session 初始化
-# ─────────────────────────────────────────────
-defaults = {
-    "step": 0,
-    "final_title": "",
-    "refs_list": [],
-    "refs_summary": "",
-    "sim_data": None,
-    "outline": "",
-    "content": {},
-    "integrated_abstract": "",
-    "integrated_ack": "",
-    "integrated_transitions": {},
-    "polished_ch1": "",
-    "full_integrated_paper": ""
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
 chapters_list = list(CHAPTER_CONFIG.keys())
 
 # ─────────────────────────────────────────────
@@ -464,36 +470,25 @@ chapters_list = list(CHAPTER_CONFIG.keys())
 with st.sidebar:
     st.title("⚙️ 設定")
 
-    # ── AI 模型設定 ──
+    # ── AI 模型 ──
     st.header("🤖 AI 模型")
-    ai_mode = st.radio(
+    st.session_state.ai_mode = st.radio(
         "選擇 AI 引擎",
-        ["Gemini", "Ollama（本地）"],
-        key="ai_mode"
+        ["Ollama（本地）", "Gemini"],
+        index=0
     )
 
-    if ai_mode == "Gemini":
-        st.text_input(
-            "Gemini API Key",
-            type="password",
-            placeholder="貼上你的 API Key",
-            key="gemini_key"
-        )
-        st.caption("🔗 免費申請：https://aistudio.google.com/app/apikey")
-
-    else:
-        st.text_input(
+    if st.session_state.ai_mode == "Ollama（本地）":
+        st.session_state.ollama_url = st.text_input(
             "Ollama 伺服器位址",
-            value="http://localhost:11434",
-            key="ollama_url"
+            value=st.session_state.ollama_url
         )
-        st.text_input(
+        st.session_state.ollama_model = st.text_input(
             "模型名稱",
-            value="llama3",
-            placeholder="llama3 / gemma3 / mistral / qwen2.5",
-            key="ollama_model"
+            value=st.session_state.ollama_model,
+            placeholder="qwen2.5:7b / llama3 / gemma3:4b"
         )
-        if st.button("🔌 測試 Ollama 連線"):
+        if st.button("🔌 測試連線"):
             try:
                 r = requests.get(
                     st.session_state.ollama_url.rstrip("/") + "/api/tags",
@@ -504,12 +499,21 @@ with st.sidebar:
                     if models:
                         st.success("✅ 連線成功！\n已安裝模型：\n" + "\n".join(models))
                     else:
-                        st.warning("連線成功，但尚未下載任何模型\n請執行：ollama pull llama3")
+                        st.warning("連線成功，但尚未安裝模型\n請執行：\nollama pull qwen2.5:7b")
                 else:
-                    st.error("連線失敗：HTTP " + str(r.status_code))
+                    st.error("連線失敗 HTTP " + str(r.status_code))
             except Exception as e:
                 st.error("無法連線：" + str(e))
-        st.caption("📌 請先執行：ollama serve")
+        st.caption("📌 使用前請先執行：ollama serve")
+
+    else:
+        st.session_state.gemini_key = st.text_input(
+            "Gemini API Key",
+            value=st.session_state.gemini_key,
+            type="password",
+            placeholder="貼上 API Key"
+        )
+        st.caption("🔗 申請：https://aistudio.google.com/app/apikey")
 
     st.divider()
 
@@ -564,7 +568,11 @@ with st.sidebar:
 # 主畫面
 # ─────────────────────────────────────────────
 st.title("🎓 論文寫作助手")
-st.caption("自動文獻 × 深度學術撰寫 × 20,000 字目標 × 支援 Gemini / Ollama")
+st.caption(
+    "自動文獻 × 深度學術撰寫 × 20,000 字目標 ｜ "
+    "目前使用：" + st.session_state.ai_mode +
+    ("（" + st.session_state.ollama_model + "）" if st.session_state.ai_mode == "Ollama（本地）" else "")
+)
 
 prog  = ["① 題目", "② 文獻", "③ 模型", "④ 大綱", "⑤ 寫作＆整合"]
 pcols = st.columns(5)
@@ -590,11 +598,12 @@ if st.session_state.step == 0:
             st.error("請輸入關鍵字")
         else:
             method_str = mcdm_method or case_method or research_mode
-            with st.spinner("生成中..."):
-                st.info(call_ai(
+            with st.spinner("AI 生成中..."):
+                result = call_ai(
                     "關鍵字：" + keywords + "，研究方法：" + method_str + "。\n"
                     "請產生 5 個繁體中文碩士論文題目，每個附說明研究方向與貢獻。"
-                ))
+                )
+                st.info(result)
 
     title_input = st.text_input(
         "確認最終題目",
@@ -691,7 +700,7 @@ elif st.session_state.step == 2:
     st.info("題目：" + st.session_state.final_title)
 
     if st.button("執行 " + current_method + " 模擬", type="primary"):
-        with st.spinner("建構模型中..."):
+        with st.spinner("建構模型中（Ollama 需要 1-3 分鐘）..."):
             result = run_simulation(
                 st.session_state.refs_summary,
                 mcdm_method,
@@ -701,9 +710,9 @@ elif st.session_state.step == 2:
             )
             if result:
                 st.session_state.sim_data = result
-                st.success("模型建構完成！")
+                st.success("✅ 模型建構完成！")
             else:
-                st.error("模擬失敗，請重試")
+                st.error("❌ 模擬失敗，請重試或換較大的模型")
 
     if st.session_state.sim_data:
         data = st.session_state.sim_data
@@ -792,7 +801,7 @@ elif st.session_state.step == 4:
     if st.button("⚡ 一鍵撰寫所有章節", type="primary"):
         for ch in chapters_list:
             if ch not in st.session_state.content:
-                with st.spinner("撰寫 " + ch + "..."):
+                with st.spinner("撰寫 " + ch + "（需要 2-5 分鐘）..."):
                     st.session_state.content[ch] = write_chapter(
                         ch,
                         st.session_state.final_title,
@@ -800,7 +809,7 @@ elif st.session_state.step == 4:
                         st.session_state.refs_list,
                         st.session_state.sim_data
                     )
-                    time.sleep(2)
+                    time.sleep(1)
         st.rerun()
 
     tab_labels = [
@@ -819,7 +828,7 @@ elif st.session_state.step == 4:
             cb1, cb2 = st.columns(2)
             with cb1:
                 if st.button("撰寫本章", key="w" + str(i), type="primary"):
-                    with st.spinner("撰寫 " + ch + "（60-90秒）..."):
+                    with st.spinner("撰寫 " + ch + "（需要 2-5 分鐘）..."):
                         st.session_state.content[ch] = write_chapter(
                             ch,
                             st.session_state.final_title,
