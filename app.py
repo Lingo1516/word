@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - 外部 API Key 安全版                        ║
-# ║     建議檔名：thesis_external_api.py                           ║
+# ║     論文寫作助手 - 外部 API Key 省額度版                      ║
+# ║     建議檔名：thesis_external_api_v3.py                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
 # 安裝：
@@ -19,6 +19,7 @@ import io
 import json
 import re
 import hashlib
+import time
 from typing import Any
 
 import pandas as pd
@@ -37,10 +38,9 @@ st.set_page_config(
 )
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 REQUEST_TIMEOUT = 90
@@ -61,11 +61,10 @@ defaults = {
     "groq_key": os.getenv("GROQ_API_KEY", ""),
     "gemini_key": os.getenv("GEMINI_API_KEY", ""),
     "groq_model": DEFAULT_GROQ_MODEL,
-    "groq_available_models": [],
-    "groq_models_loaded": False,
     "gemini_model": DEFAULT_GEMINI_MODEL,
     "research_method": "問卷調查",
-    "literature_fetch_prompt": "",
+    "rate_limit_info": {},
+    "economy_mode": True,
 }
 
 for k, v in defaults.items():
@@ -153,85 +152,6 @@ def parse_error_response(res: requests.Response) -> str:
     return text[:300] if text else f"HTTP {res.status_code}"
 
 
-
-def get_groq_models(api_key: str):
-    """讀取這把 Groq API Key 目前實際可見的模型。"""
-    api_key = clean_api_key(api_key)
-    if not api_key:
-        return [], "尚未輸入 Groq API Key"
-
-    try:
-        res = requests.get(
-            GROQ_MODELS_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=20,
-        )
-
-        if res.status_code == 200:
-            data = res.json().get("data", [])
-            model_ids = sorted({
-                str(item.get("id", "")).strip()
-                for item in data
-                if item.get("id")
-            })
-
-            excluded_keywords = (
-                "whisper",
-                "tts",
-                "speech",
-                "guard",
-                "safeguard",
-            )
-            chat_models = [
-                m for m in model_ids
-                if not any(k in m.lower() for k in excluded_keywords)
-            ]
-            return chat_models or model_ids, ""
-
-        if res.status_code in (401, 403):
-            return [], "Groq API Key 無效或沒有列出模型的權限"
-
-        return [], f"Groq 模型清單讀取失敗 {res.status_code}：{parse_error_response(res)}"
-
-    except requests.RequestException as e:
-        return [], f"Groq 模型清單連線失敗：{str(e)[:150]}"
-
-
-def choose_groq_fallback(model_ids):
-    """依穩定性與成本優先順序挑選替代模型。"""
-    preferred = [
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "llama-3.1-8b-instant",
-        "groq/compound-mini",
-        "groq/compound",
-    ]
-    for model in preferred:
-        if model in model_ids:
-            return model
-    return model_ids[0] if model_ids else ""
-
-
-def refresh_groq_models():
-    """更新側邊欄使用的 Groq 模型清單。"""
-    models, err = get_groq_models(st.session_state.groq_key)
-    if models:
-        st.session_state.groq_available_models = models
-        st.session_state.groq_models_loaded = True
-
-        if st.session_state.groq_model not in models:
-            st.session_state.groq_model = choose_groq_fallback(models)
-
-        return True, f"已取得 {len(models)} 個可用模型"
-
-    st.session_state.groq_available_models = []
-    st.session_state.groq_models_loaded = False
-    return False, err
-
-
 # ─────────────────────────────────────────────
 # AI 呼叫
 # ─────────────────────────────────────────────
@@ -258,15 +178,15 @@ def call_ai(
 
     try:
         if ai_mode == "Groq（免費雲端）":
-            def send_groq_request(target_model: str):
-                return requests.post(
+            def do_groq_request():
+                response = requests.post(
                     GROQ_API_URL,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": target_model,
+                        "model": model_name,
                         "messages": [
                             {"role": "system", "content": sys_role},
                             {"role": "user", "content": prompt},
@@ -277,28 +197,37 @@ def call_ai(
                     timeout=REQUEST_TIMEOUT,
                 )
 
-            available = st.session_state.get("groq_available_models", [])
-            if available and model_name not in available:
-                fallback = choose_groq_fallback(available)
-                if fallback:
-                    model_name = fallback
-                    st.session_state.groq_model = fallback
+                # Groq 會在 response headers 告知目前限額狀態
+                st.session_state.rate_limit_info = {
+                    "remaining_requests": response.headers.get(
+                        "x-ratelimit-remaining-requests", ""
+                    ),
+                    "remaining_tokens": response.headers.get(
+                        "x-ratelimit-remaining-tokens", ""
+                    ),
+                    "reset_requests": response.headers.get(
+                        "x-ratelimit-reset-requests", ""
+                    ),
+                    "reset_tokens": response.headers.get(
+                        "x-ratelimit-reset-tokens", ""
+                    ),
+                    "retry_after": response.headers.get("retry-after", ""),
+                }
+                return response
 
-            res = send_groq_request(model_name)
+            res = do_groq_request()
 
-            if res.status_code == 404:
-                models, model_err = get_groq_models(api_key)
-                if models:
-                    st.session_state.groq_available_models = models
-                    st.session_state.groq_models_loaded = True
-                    fallback = choose_groq_fallback(models)
+            # 若只是短時間 TPM/RPM 限制，自動等候一次再重試。
+            if res.status_code == 429:
+                retry_after_raw = res.headers.get("retry-after", "")
+                try:
+                    retry_after = float(retry_after_raw)
+                except (TypeError, ValueError):
+                    retry_after = 0
 
-                    if fallback and fallback != model_name:
-                        st.session_state.groq_model = fallback
-                        model_name = fallback
-                        res = send_groq_request(model_name)
-                elif model_err:
-                    return f"❌ Groq 模型不可用，而且無法讀取可用模型清單：{model_err}"
+                if 0 < retry_after <= 20:
+                    time.sleep(retry_after + 0.5)
+                    res = do_groq_request()
 
             if res.status_code == 200:
                 data = res.json()
@@ -306,17 +235,15 @@ def call_ai(
             elif res.status_code == 401:
                 return "❌ Groq API Key 無效或未授權，請重新確認。"
             elif res.status_code == 403:
-                return (
-                    "❌ Groq 拒絕此模型或專案權限。"
-                    "請按左側「🔄 讀取可用 Groq 模型」後改選其他模型。"
-                )
-            elif res.status_code == 404:
-                return (
-                    f"❌ Groq 找不到或無法使用模型 `{model_name}`。"
-                    "請按左側「🔄 讀取可用 Groq 模型」重新取得模型清單。"
-                )
+                return "❌ Groq 拒絕此模型或專案權限，請確認模型權限設定。"
             elif res.status_code == 429:
-                return "⚠️ Groq 已達速率或額度限制，請稍後再試或切換 Gemini。"
+                retry = res.headers.get("retry-after", "")
+                detail = parse_error_response(res)
+                retry_text = f"；約 {retry} 秒後可再試" if retry else ""
+                return (
+                    "⚠️ Groq 目前撞到速率限制（不一定是今日額度用完）"
+                    f"{retry_text}。\n\n詳細訊息：{detail}"
+                )
             else:
                 return f"❌ Groq 錯誤 {res.status_code}：{parse_error_response(res)}"
 
@@ -490,42 +417,6 @@ def simulate_model_simple(topic: str, method: str):
 
 
 # ─────────────────────────────────────────────
-# 文獻補抓提示詞
-# ─────────────────────────────────────────────
-LITERATURE_FETCH_PROMPT_TEMPLATE = """
-【系統文獻補抓任務】
-
-研究題目：
-{title}
-
-研究方法：
-{method}
-
-請在後續進行論文撰寫前，優先補充與本研究直接相關的真實文獻。
-
-文獻要求：
-1. 僅使用可查證、真實存在的學術文獻，不得自行杜撰作者、題名、期刊、年份或 DOI。
-2. 優先搜尋近 5～10 年之期刊論文、碩博士論文、正式研究報告。
-3. 優先補足與「研究變項、理論基礎、研究方法、研究對象」直接相關的文獻。
-4. 中文與英文文獻皆可；若研究情境涉及台灣，優先加入台灣相關研究。
-5. 每篇文獻盡可能保留：作者、年份、題名、期刊/學位論文來源、DOI 或可驗證網址。
-6. 如果目前無法即時查證某篇文獻，請標示【待查證】，不要把它當正式引用。
-7. 撰寫文獻探討時，只能引用已確認存在的文獻。
-8. 若文獻不足，請先標示【系統待補抓文獻】，不要自行創造來源。
-
-這一段是系統內部的「後續補抓真實文獻提示詞」，即使目前文獻步驟沒有完成，
-也允許使用者先進入研究模型與後續寫作流程。
-"""
-
-
-def build_literature_fetch_prompt(title: str, method: str) -> str:
-    return LITERATURE_FETCH_PROMPT_TEMPLATE.format(
-        title=title or "【尚未設定題目】",
-        method=method or "【尚未設定研究方法】",
-    )
-
-
-# ─────────────────────────────────────────────
 # 章節 Prompt
 # ─────────────────────────────────────────────
 CHAPTER_PROMPTS = {
@@ -544,7 +435,7 @@ CHAPTER_PROMPTS = {
 3. 相關實證研究整理
 4. 研究缺口
 5. 可驗證之研究假設或研究命題
-只能引用已確認存在的真實文獻；若目前尚未提供文獻，請以【系統待補抓文獻】標示引用位置，不得自行創造來源。
+只能引用下方提供的真實文獻；資料不足時請明確寫【需補充文獻】。
 """,
     "第三章 研究方法": """
 撰寫第三章研究方法草稿，包含：
@@ -573,7 +464,13 @@ CHAPTER_PROMPTS = {
 }
 
 
-def make_refs_text(refs, limit=12):
+def make_refs_text(refs, limit=5, include_abstract=False):
+    """
+    省額度版文獻上下文：
+    - 一般章節只傳作者、年份、題名、期刊
+    - 只有第二章文獻探討才附短摘要
+    - 避免每章重複塞入大量 abstract，造成 TPM 快速耗盡
+    """
     lines = []
     for i, r in enumerate(refs[:limit], start=1):
         title = r.get("title", "")
@@ -581,30 +478,41 @@ def make_refs_text(refs, limit=12):
         year = r.get("year", "")
         venue = r.get("venue", "")
         doi = r.get("doi", "")
-        abstract = r.get("abstract", "")
-        lines.append(
-            f"[{i}] {authors} ({year}). {title}. {venue}. DOI:{doi}\n"
-            f"摘要片段：{abstract}"
-        )
+
+        line = f"[{i}] {authors} ({year}). {title}. {venue}."
+        if doi:
+            line += f" DOI:{doi}"
+
+        if include_abstract:
+            abstract = (r.get("abstract") or "").strip()
+            if abstract:
+                # 只保留短摘要，避免輸入 token 暴增
+                line += f"\n摘要片段：{abstract[:300]}"
+
+        lines.append(line)
+
     return "\n\n".join(lines)
 
-
 def write_chapter_fast(chapter: str, title: str, refs):
-    refs_text = make_refs_text(refs)
-
-    literature_fetch_prompt = build_literature_fetch_prompt(
-        title,
-        st.session_state.get("research_method", ""),
+    # 只有文獻探討需要摘要；其他章節只傳精簡書目資訊
+    include_abstract = chapter == "第二章 文獻探討"
+    refs_text = make_refs_text(
+        refs,
+        limit=5,
+        include_abstract=include_abstract,
     )
+
+    if chapter == "第二章 文獻探討" and not refs:
+        return (
+            "⚠️ 尚未取得可驗證文獻，因此不自動撰寫文獻探討。"
+            "請先回到文獻步驟搜尋真實文獻。"
+        )
 
     prompt = f"""
 論文題目：{title}
 
-目前已取得的真實文獻：
-{refs_text if refs_text else "目前尚未取得文獻，請依下方系統補抓規則保留待補位置。"}
-
-系統後續補抓真實文獻提示詞：
-{literature_fetch_prompt}
+可使用的真實文獻：
+{refs_text if refs_text else "目前未提供文獻。"}
 
 任務：
 {CHAPTER_PROMPTS.get(chapter, "")}
@@ -617,7 +525,25 @@ def write_chapter_fast(chapter: str, title: str, refs):
 - 本次輸出為論文草稿，不宣稱已完成正式研究。
 """
 
-    return call_ai(prompt, max_tokens=3500)
+    # 舊版大多是 2000 tokens；這裡依章節控制，
+    # 避免五章連續各 3500 tokens 把免費 TPM 撞滿。
+    economy_limits = {
+        "第一章 緒論": 1400,
+        "第二章 文獻探討": 2000,
+        "第三章 研究方法": 1600,
+        "第四章 結果": 1200,
+        "第五章 結論": 1200,
+    }
+    normal_limits = {
+        "第一章 緒論": 1800,
+        "第二章 文獻探討": 2400,
+        "第三章 研究方法": 2000,
+        "第四章 結果": 1500,
+        "第五章 結論": 1500,
+    }
+
+    limits = economy_limits if st.session_state.economy_mode else normal_limits
+    return call_ai(prompt, max_tokens=limits.get(chapter, 1600))
 
 
 def generate_abstract():
@@ -631,14 +557,14 @@ def generate_abstract():
 論文題目：{st.session_state.final_title}
 
 以下是目前論文草稿：
-{chapter_text[:18000]}
+{chapter_text[:10000]}
 
 請撰寫 400～600 字繁體中文摘要草稿。
 必須包含研究目的、方法、預期或已知結果狀態、研究價值。
 若第四章沒有真實數據，請用「本研究結果尚待實證資料分析完成」之類的表述，
 不得虛構研究發現。
 """
-    return call_ai(prompt, max_tokens=1200)
+    return call_ai(prompt, max_tokens=800)
 
 
 def format_reference(ref: dict) -> str:
@@ -690,39 +616,12 @@ with st.sidebar:
         help="只保存在目前 Streamlit 工作階段；也可使用 GEMINI_API_KEY 環境變數。",
     )
 
-    with st.expander("🧠 進階模型設定", expanded=True):
-        if st.button("🔄 讀取可用 Groq 模型"):
-            ok, msg = refresh_groq_models()
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
-
-        groq_models = st.session_state.get("groq_available_models", [])
-
-        if groq_models:
-            current_model = st.session_state.groq_model
-            if current_model not in groq_models:
-                current_model = choose_groq_fallback(groq_models)
-                st.session_state.groq_model = current_model
-
-            selected_groq_model = st.selectbox(
-                "Groq 模型",
-                groq_models,
-                index=groq_models.index(current_model),
-                help="此清單由你的 Groq API Key 即時讀取。",
-            )
-            st.session_state.groq_model = selected_groq_model
-        else:
-            st.text_input(
-                "Groq 模型 ID",
-                key="groq_model",
-                help=(
-                    f"尚未讀取模型清單時使用預設值：{DEFAULT_GROQ_MODEL}。"
-                    "建議先按上方按鈕讀取你的 Key 可用模型。"
-                ),
-            )
-
+    with st.expander("🧠 進階模型設定"):
+        st.text_input(
+            "Groq 模型 ID",
+            key="groq_model",
+            help=f"預設：{DEFAULT_GROQ_MODEL}",
+        )
         st.text_input(
             "Gemini 模型 ID",
             key="gemini_model",
@@ -738,12 +637,6 @@ with st.sidebar:
 
     if st.button("🧪 測試 API 連線"):
         with st.spinner("測試中..."):
-            if (
-                st.session_state.ai_mode == "Groq（免費雲端）"
-                and clean_api_key(st.session_state.groq_key)
-                and not st.session_state.get("groq_models_loaded", False)
-            ):
-                refresh_groq_models()
             test_result = test_current_api()
         if test_result.strip().upper() == "OK":
             st.success("API 連線正常")
@@ -755,6 +648,26 @@ with st.sidebar:
     if st.button("🧹 清除 AI 快取"):
         st.session_state.ai_cache = {}
         st.success("已清除快取")
+
+    st.toggle(
+        "💰 省額度模式",
+        key="economy_mode",
+        help="縮短每章輸出並減少送入 API 的文獻內容；建議 Groq 免費方案開啟。",
+    )
+
+    if st.session_state.ai_mode == "Groq（免費雲端）":
+        info = st.session_state.rate_limit_info
+        if info:
+            with st.expander("📊 Groq 即時限額狀態"):
+                remaining_tokens = info.get("remaining_tokens") or "—"
+                remaining_requests = info.get("remaining_requests") or "—"
+                reset_tokens = info.get("reset_tokens") or "—"
+                st.write(f"本分鐘剩餘 tokens：{remaining_tokens}")
+                st.write(f"剩餘 requests：{remaining_requests}")
+                st.write(f"Token 重置：約 {reset_tokens}")
+                st.caption(
+                    "這些數值來自 Groq API 回應；429 不一定代表每日額度用完。"
+                )
 
     st.header("📝 研究設定")
     st.selectbox(
@@ -837,8 +750,7 @@ elif st.session_state.step == 1:
     st.info(f"📌 研究題目：{st.session_state.final_title}")
 
     st.caption(
-        "這一步可先跳過。若目前尚未取得文獻，系統會保留「後續補抓真實文獻」提示詞，"
-        "讓你先繼續建立研究模型與論文架構。"
+        "此版本不再讓 AI 自行「生成」參考文獻，只保留實際搜尋到的資料。"
     )
 
     if st.button("🔍 搜尋真實文獻", type="primary"):
@@ -850,17 +762,6 @@ elif st.session_state.step == 1:
             st.success(f"✅ 收集到 {len(refs)} 篇可追溯文獻")
         else:
             st.warning("目前沒有取得文獻，請稍後再試或調整題目關鍵字。")
-
-    st.session_state.literature_fetch_prompt = build_literature_fetch_prompt(
-        st.session_state.final_title,
-        st.session_state.research_method,
-    )
-
-    with st.expander("🤖 系統後續補抓真實文獻提示詞"):
-        st.code(
-            st.session_state.literature_fetch_prompt,
-            language=None,
-        )
 
     if st.session_state.refs_list:
         df = pd.DataFrame(st.session_state.refs_list)
@@ -884,16 +785,10 @@ elif st.session_state.step == 1:
     with col2:
         if st.button("➡️ 下一步", type="primary"):
             if not st.session_state.refs_list:
-                st.session_state.literature_fetch_prompt = build_literature_fetch_prompt(
-                    st.session_state.final_title,
-                    st.session_state.research_method,
-                )
-                st.info(
-                    "目前先略過文獻收集；系統已保留後續補抓真實文獻提示詞。"
-                )
-
-            st.session_state.step = 2
-            st.rerun()
+                st.warning("建議先取得真實文獻再進入下一步。")
+            else:
+                st.session_state.step = 2
+                st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -942,22 +837,38 @@ elif st.session_state.step == 3:
 
     if st.button("🚀 一鍵生成五章草稿", type="primary"):
         if not st.session_state.refs_list:
-            st.info(
-                "目前尚未匯入真實文獻；系統會依「後續補抓真實文獻」規則，"
-                "先建立可繼續編修的論文草稿與待補位置。"
-            )
+            st.warning("請先回到文獻步驟搜尋真實文獻。")
+        else:
+            generated_count = 0
+            for ch in chapters:
+                if ch not in st.session_state.content:
+                    # Groq 免費方案有每分鐘 token 上限。
+                    # 章節間保留短暫間隔，降低連續請求撞 TPM 的機率。
+                    if (
+                        generated_count > 0
+                        and st.session_state.ai_mode == "Groq（免費雲端）"
+                    ):
+                        time.sleep(3)
 
-        for ch in chapters:
-            if ch not in st.session_state.content:
-                with st.spinner(f"正在撰寫 {ch}..."):
-                    st.session_state.content[ch] = write_chapter_fast(
-                        ch,
-                        st.session_state.final_title,
-                        st.session_state.refs_list,
-                    )
+                    with st.spinner(f"正在撰寫 {ch}..."):
+                        result = write_chapter_fast(
+                            ch,
+                            st.session_state.final_title,
+                            st.session_state.refs_list,
+                        )
+                        st.session_state.content[ch] = result
+                        generated_count += 1
 
-        st.success("🎉 五章草稿已生成")
-        st.rerun()
+                    # 若已撞 rate limit，就停止連打，保留前面完成的章節。
+                    if result.startswith("⚠️ Groq 目前撞到速率限制"):
+                        st.warning(
+                            "已暫停後續章節，避免持續消耗請求。"
+                            "稍後再按一次即可從未完成章節續寫。"
+                        )
+                        break
+
+            st.success("✅ 本輪可完成的章節已保存")
+            st.rerun()
 
     for ch in chapters:
         with st.expander(
@@ -1085,6 +996,5 @@ elif st.session_state.step == 3:
 # ─────────────────────────────────────────────
 st.divider()
 st.caption(
-    "🔐 API Key 不寫入原始碼。Groq 模型可依你的 API Key 即時讀取；"
-    "正式部署時建議使用環境變數或平台 Secrets 管理。"
+    "🔐 API Key 不寫入原始碼。建議正式部署時使用環境變數或平台 Secrets 管理。"
 )
