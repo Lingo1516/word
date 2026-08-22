@@ -65,6 +65,7 @@ defaults = {
     "groq_models_loaded": False,
     "gemini_model": DEFAULT_GEMINI_MODEL,
     "research_method": "問卷調查",
+    "literature_fetch_prompt": "",
 }
 
 for k, v in defaults.items():
@@ -489,6 +490,42 @@ def simulate_model_simple(topic: str, method: str):
 
 
 # ─────────────────────────────────────────────
+# 文獻補抓提示詞
+# ─────────────────────────────────────────────
+LITERATURE_FETCH_PROMPT_TEMPLATE = """
+【系統文獻補抓任務】
+
+研究題目：
+{title}
+
+研究方法：
+{method}
+
+請在後續進行論文撰寫前，優先補充與本研究直接相關的真實文獻。
+
+文獻要求：
+1. 僅使用可查證、真實存在的學術文獻，不得自行杜撰作者、題名、期刊、年份或 DOI。
+2. 優先搜尋近 5～10 年之期刊論文、碩博士論文、正式研究報告。
+3. 優先補足與「研究變項、理論基礎、研究方法、研究對象」直接相關的文獻。
+4. 中文與英文文獻皆可；若研究情境涉及台灣，優先加入台灣相關研究。
+5. 每篇文獻盡可能保留：作者、年份、題名、期刊/學位論文來源、DOI 或可驗證網址。
+6. 如果目前無法即時查證某篇文獻，請標示【待查證】，不要把它當正式引用。
+7. 撰寫文獻探討時，只能引用已確認存在的文獻。
+8. 若文獻不足，請先標示【系統待補抓文獻】，不要自行創造來源。
+
+這一段是系統內部的「後續補抓真實文獻提示詞」，即使目前文獻步驟沒有完成，
+也允許使用者先進入研究模型與後續寫作流程。
+"""
+
+
+def build_literature_fetch_prompt(title: str, method: str) -> str:
+    return LITERATURE_FETCH_PROMPT_TEMPLATE.format(
+        title=title or "【尚未設定題目】",
+        method=method or "【尚未設定研究方法】",
+    )
+
+
+# ─────────────────────────────────────────────
 # 章節 Prompt
 # ─────────────────────────────────────────────
 CHAPTER_PROMPTS = {
@@ -507,7 +544,7 @@ CHAPTER_PROMPTS = {
 3. 相關實證研究整理
 4. 研究缺口
 5. 可驗證之研究假設或研究命題
-只能引用下方提供的真實文獻；資料不足時請明確寫【需補充文獻】。
+只能引用已確認存在的真實文獻；若目前尚未提供文獻，請以【系統待補抓文獻】標示引用位置，不得自行創造來源。
 """,
     "第三章 研究方法": """
 撰寫第三章研究方法草稿，包含：
@@ -555,17 +592,19 @@ def make_refs_text(refs, limit=12):
 def write_chapter_fast(chapter: str, title: str, refs):
     refs_text = make_refs_text(refs)
 
-    if chapter == "第二章 文獻探討" and not refs:
-        return (
-            "⚠️ 尚未取得可驗證文獻，因此不自動撰寫文獻探討。"
-            "請先回到文獻步驟搜尋真實文獻。"
-        )
+    literature_fetch_prompt = build_literature_fetch_prompt(
+        title,
+        st.session_state.get("research_method", ""),
+    )
 
     prompt = f"""
 論文題目：{title}
 
-可使用的真實文獻：
-{refs_text if refs_text else "目前未提供文獻。"}
+目前已取得的真實文獻：
+{refs_text if refs_text else "目前尚未取得文獻，請依下方系統補抓規則保留待補位置。"}
+
+系統後續補抓真實文獻提示詞：
+{literature_fetch_prompt}
 
 任務：
 {CHAPTER_PROMPTS.get(chapter, "")}
@@ -798,7 +837,8 @@ elif st.session_state.step == 1:
     st.info(f"📌 研究題目：{st.session_state.final_title}")
 
     st.caption(
-        "此版本不再讓 AI 自行「生成」參考文獻，只保留實際搜尋到的資料。"
+        "這一步可先跳過。若目前尚未取得文獻，系統會保留「後續補抓真實文獻」提示詞，"
+        "讓你先繼續建立研究模型與論文架構。"
     )
 
     if st.button("🔍 搜尋真實文獻", type="primary"):
@@ -810,6 +850,17 @@ elif st.session_state.step == 1:
             st.success(f"✅ 收集到 {len(refs)} 篇可追溯文獻")
         else:
             st.warning("目前沒有取得文獻，請稍後再試或調整題目關鍵字。")
+
+    st.session_state.literature_fetch_prompt = build_literature_fetch_prompt(
+        st.session_state.final_title,
+        st.session_state.research_method,
+    )
+
+    with st.expander("🤖 系統後續補抓真實文獻提示詞"):
+        st.code(
+            st.session_state.literature_fetch_prompt,
+            language=None,
+        )
 
     if st.session_state.refs_list:
         df = pd.DataFrame(st.session_state.refs_list)
@@ -833,10 +884,16 @@ elif st.session_state.step == 1:
     with col2:
         if st.button("➡️ 下一步", type="primary"):
             if not st.session_state.refs_list:
-                st.warning("建議先取得真實文獻再進入下一步。")
-            else:
-                st.session_state.step = 2
-                st.rerun()
+                st.session_state.literature_fetch_prompt = build_literature_fetch_prompt(
+                    st.session_state.final_title,
+                    st.session_state.research_method,
+                )
+                st.info(
+                    "目前先略過文獻收集；系統已保留後續補抓真實文獻提示詞。"
+                )
+
+            st.session_state.step = 2
+            st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -885,18 +942,22 @@ elif st.session_state.step == 3:
 
     if st.button("🚀 一鍵生成五章草稿", type="primary"):
         if not st.session_state.refs_list:
-            st.warning("請先回到文獻步驟搜尋真實文獻。")
-        else:
-            for ch in chapters:
-                if ch not in st.session_state.content:
-                    with st.spinner(f"正在撰寫 {ch}..."):
-                        st.session_state.content[ch] = write_chapter_fast(
-                            ch,
-                            st.session_state.final_title,
-                            st.session_state.refs_list,
-                        )
-            st.success("🎉 五章草稿已生成")
-            st.rerun()
+            st.info(
+                "目前尚未匯入真實文獻；系統會依「後續補抓真實文獻」規則，"
+                "先建立可繼續編修的論文草稿與待補位置。"
+            )
+
+        for ch in chapters:
+            if ch not in st.session_state.content:
+                with st.spinner(f"正在撰寫 {ch}..."):
+                    st.session_state.content[ch] = write_chapter_fast(
+                        ch,
+                        st.session_state.final_title,
+                        st.session_state.refs_list,
+                    )
+
+        st.success("🎉 五章草稿已生成")
+        st.rerun()
 
     for ch in chapters:
         with st.expander(
