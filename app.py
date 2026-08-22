@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - 外部 API Key 省額度版                      ║
-# ║     建議檔名：thesis_external_api_v3.py                        ║
+# ║     論文寫作助手 - 外部 API Key 動態模型版                      ║
+# ║     建議檔名：thesis_external_api_v4.py                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
 # 安裝：
@@ -38,9 +38,10 @@ st.set_page_config(
 )
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 REQUEST_TIMEOUT = 90
@@ -65,6 +66,8 @@ defaults = {
     "research_method": "問卷調查",
     "rate_limit_info": {},
     "economy_mode": True,
+    "groq_available_models": [],
+    "groq_models_error": "",
 }
 
 for k, v in defaults.items():
@@ -152,6 +155,61 @@ def parse_error_response(res: requests.Response) -> str:
     return text[:300] if text else f"HTTP {res.status_code}"
 
 
+def fetch_groq_models(api_key: str):
+    """
+    使用目前輸入的 Groq API Key 取得「該帳號實際可用」模型。
+    這比把模型 ID 寫死在程式碼安全，能避免模型下架後持續 404。
+    """
+    api_key = clean_api_key(api_key)
+    if not api_key:
+        return [], "尚未輸入 Groq API Key"
+
+    try:
+        res = requests.get(
+            GROQ_MODELS_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=20,
+        )
+
+        if res.status_code == 200:
+            data = res.json().get("data", [])
+            model_ids = sorted(
+                {
+                    m.get("id", "").strip()
+                    for m in data
+                    if isinstance(m, dict) and m.get("id")
+                }
+            )
+            return model_ids, ""
+
+        if res.status_code in (401, 403):
+            return [], "Groq API Key 無效或無權限"
+
+        return [], f"Groq 模型清單讀取失敗：{res.status_code} {parse_error_response(res)}"
+
+    except requests.RequestException as e:
+        return [], f"Groq 模型清單連線失敗：{str(e)[:150]}"
+
+
+def choose_recommended_groq_model(model_ids):
+    """
+    優先選擇適合長文學術寫作的模型。
+    Groq 2026-08-16 已停止 llama-3.3-70b-versatile。
+    """
+    preferred = [
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.6-27b",
+        "openai/gpt-oss-20b",
+    ]
+    for model_id in preferred:
+        if model_id in model_ids:
+            return model_id
+    return model_ids[0] if model_ids else DEFAULT_GROQ_MODEL
+
+
 # ─────────────────────────────────────────────
 # AI 呼叫
 # ─────────────────────────────────────────────
@@ -236,6 +294,11 @@ def call_ai(
                 return "❌ Groq API Key 無效或未授權，請重新確認。"
             elif res.status_code == 403:
                 return "❌ Groq 拒絕此模型或專案權限，請確認模型權限設定。"
+            elif res.status_code == 404:
+                return (
+                    f"❌ Groq 找不到模型「{model_name}」或你的帳號沒有存取權。"
+                    "請在左側按「🔄 重新讀取 Groq 模型」，再選擇目前可用模型。"
+                )
             elif res.status_code == 429:
                 retry = res.headers.get("retry-after", "")
                 detail = parse_error_response(res)
@@ -616,17 +679,66 @@ with st.sidebar:
         help="只保存在目前 Streamlit 工作階段；也可使用 GEMINI_API_KEY 環境變數。",
     )
 
-    with st.expander("🧠 進階模型設定"):
-        st.text_input(
-            "Groq 模型 ID",
-            key="groq_model",
-            help=f"預設：{DEFAULT_GROQ_MODEL}",
-        )
-        st.text_input(
-            "Gemini 模型 ID",
-            key="gemini_model",
-            help=f"預設：{DEFAULT_GEMINI_MODEL}",
-        )
+    with st.expander("🧠 模型設定", expanded=True):
+        if st.session_state.ai_mode == "Groq（免費雲端）":
+            if st.button("🔄 重新讀取 Groq 模型"):
+                models, err = fetch_groq_models(st.session_state.groq_key)
+                st.session_state.groq_available_models = models
+                st.session_state.groq_models_error = err
+
+                if models:
+                    recommended = choose_recommended_groq_model(models)
+                    st.session_state.groq_model = recommended
+                    st.success(f"已取得 {len(models)} 個可用模型")
+                elif err:
+                    st.error(err)
+
+            # 第一次輸入 Key 後若尚未抓過清單，自動嘗試一次
+            if (
+                clean_api_key(st.session_state.groq_key)
+                and not st.session_state.groq_available_models
+                and not st.session_state.groq_models_error
+            ):
+                models, err = fetch_groq_models(st.session_state.groq_key)
+                st.session_state.groq_available_models = models
+                st.session_state.groq_models_error = err
+
+                if models:
+                    recommended = choose_recommended_groq_model(models)
+                    if st.session_state.groq_model not in models:
+                        st.session_state.groq_model = recommended
+
+            available = st.session_state.groq_available_models
+
+            if available:
+                # 確保目前值存在於 selectbox options
+                if st.session_state.groq_model not in available:
+                    st.session_state.groq_model = choose_recommended_groq_model(available)
+
+                st.selectbox(
+                    "Groq 模型",
+                    options=available,
+                    key="groq_model",
+                    help="此清單由 Groq API 即時讀取，顯示你的帳號目前實際可用模型。",
+                )
+
+                recommended = choose_recommended_groq_model(available)
+                st.caption(f"📌 長文寫作建議：{recommended}")
+            else:
+                st.text_input(
+                    "Groq 模型 ID",
+                    key="groq_model",
+                    help=f"目前無法取得模型清單；預設：{DEFAULT_GROQ_MODEL}",
+                )
+                if st.session_state.groq_models_error:
+                    st.caption(st.session_state.groq_models_error)
+
+        else:
+            st.text_input(
+                "Gemini 模型 ID",
+                key="gemini_model",
+                help=f"預設：{DEFAULT_GEMINI_MODEL}",
+            )
 
     selected_key = (
         st.session_state.groq_key
