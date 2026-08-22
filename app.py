@@ -37,9 +37,10 @@ st.set_page_config(
 )
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 REQUEST_TIMEOUT = 90
@@ -60,6 +61,8 @@ defaults = {
     "groq_key": os.getenv("GROQ_API_KEY", ""),
     "gemini_key": os.getenv("GEMINI_API_KEY", ""),
     "groq_model": DEFAULT_GROQ_MODEL,
+    "groq_available_models": [],
+    "groq_models_loaded": False,
     "gemini_model": DEFAULT_GEMINI_MODEL,
     "research_method": "問卷調查",
 }
@@ -149,6 +152,85 @@ def parse_error_response(res: requests.Response) -> str:
     return text[:300] if text else f"HTTP {res.status_code}"
 
 
+
+def get_groq_models(api_key: str):
+    """讀取這把 Groq API Key 目前實際可見的模型。"""
+    api_key = clean_api_key(api_key)
+    if not api_key:
+        return [], "尚未輸入 Groq API Key"
+
+    try:
+        res = requests.get(
+            GROQ_MODELS_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=20,
+        )
+
+        if res.status_code == 200:
+            data = res.json().get("data", [])
+            model_ids = sorted({
+                str(item.get("id", "")).strip()
+                for item in data
+                if item.get("id")
+            })
+
+            excluded_keywords = (
+                "whisper",
+                "tts",
+                "speech",
+                "guard",
+                "safeguard",
+            )
+            chat_models = [
+                m for m in model_ids
+                if not any(k in m.lower() for k in excluded_keywords)
+            ]
+            return chat_models or model_ids, ""
+
+        if res.status_code in (401, 403):
+            return [], "Groq API Key 無效或沒有列出模型的權限"
+
+        return [], f"Groq 模型清單讀取失敗 {res.status_code}：{parse_error_response(res)}"
+
+    except requests.RequestException as e:
+        return [], f"Groq 模型清單連線失敗：{str(e)[:150]}"
+
+
+def choose_groq_fallback(model_ids):
+    """依穩定性與成本優先順序挑選替代模型。"""
+    preferred = [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "llama-3.1-8b-instant",
+        "groq/compound-mini",
+        "groq/compound",
+    ]
+    for model in preferred:
+        if model in model_ids:
+            return model
+    return model_ids[0] if model_ids else ""
+
+
+def refresh_groq_models():
+    """更新側邊欄使用的 Groq 模型清單。"""
+    models, err = get_groq_models(st.session_state.groq_key)
+    if models:
+        st.session_state.groq_available_models = models
+        st.session_state.groq_models_loaded = True
+
+        if st.session_state.groq_model not in models:
+            st.session_state.groq_model = choose_groq_fallback(models)
+
+        return True, f"已取得 {len(models)} 個可用模型"
+
+    st.session_state.groq_available_models = []
+    st.session_state.groq_models_loaded = False
+    return False, err
+
+
 # ─────────────────────────────────────────────
 # AI 呼叫
 # ─────────────────────────────────────────────
@@ -175,23 +257,47 @@ def call_ai(
 
     try:
         if ai_mode == "Groq（免費雲端）":
-            res = requests.post(
-                GROQ_API_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": sys_role},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_completion_tokens": max_tokens,
-                    "temperature": 0.5,
-                },
-                timeout=REQUEST_TIMEOUT,
-            )
+            def send_groq_request(target_model: str):
+                return requests.post(
+                    GROQ_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": target_model,
+                        "messages": [
+                            {"role": "system", "content": sys_role},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "max_completion_tokens": max_tokens,
+                        "temperature": 0.5,
+                    },
+                    timeout=REQUEST_TIMEOUT,
+                )
+
+            available = st.session_state.get("groq_available_models", [])
+            if available and model_name not in available:
+                fallback = choose_groq_fallback(available)
+                if fallback:
+                    model_name = fallback
+                    st.session_state.groq_model = fallback
+
+            res = send_groq_request(model_name)
+
+            if res.status_code == 404:
+                models, model_err = get_groq_models(api_key)
+                if models:
+                    st.session_state.groq_available_models = models
+                    st.session_state.groq_models_loaded = True
+                    fallback = choose_groq_fallback(models)
+
+                    if fallback and fallback != model_name:
+                        st.session_state.groq_model = fallback
+                        model_name = fallback
+                        res = send_groq_request(model_name)
+                elif model_err:
+                    return f"❌ Groq 模型不可用，而且無法讀取可用模型清單：{model_err}"
 
             if res.status_code == 200:
                 data = res.json()
@@ -199,7 +305,15 @@ def call_ai(
             elif res.status_code == 401:
                 return "❌ Groq API Key 無效或未授權，請重新確認。"
             elif res.status_code == 403:
-                return "❌ Groq 拒絕此模型或專案權限，請確認模型權限設定。"
+                return (
+                    "❌ Groq 拒絕此模型或專案權限。"
+                    "請按左側「🔄 讀取可用 Groq 模型」後改選其他模型。"
+                )
+            elif res.status_code == 404:
+                return (
+                    f"❌ Groq 找不到或無法使用模型 `{model_name}`。"
+                    "請按左側「🔄 讀取可用 Groq 模型」重新取得模型清單。"
+                )
             elif res.status_code == 429:
                 return "⚠️ Groq 已達速率或額度限制，請稍後再試或切換 Gemini。"
             else:
@@ -537,12 +651,39 @@ with st.sidebar:
         help="只保存在目前 Streamlit 工作階段；也可使用 GEMINI_API_KEY 環境變數。",
     )
 
-    with st.expander("🧠 進階模型設定"):
-        st.text_input(
-            "Groq 模型 ID",
-            key="groq_model",
-            help=f"預設：{DEFAULT_GROQ_MODEL}",
-        )
+    with st.expander("🧠 進階模型設定", expanded=True):
+        if st.button("🔄 讀取可用 Groq 模型"):
+            ok, msg = refresh_groq_models()
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+        groq_models = st.session_state.get("groq_available_models", [])
+
+        if groq_models:
+            current_model = st.session_state.groq_model
+            if current_model not in groq_models:
+                current_model = choose_groq_fallback(groq_models)
+                st.session_state.groq_model = current_model
+
+            selected_groq_model = st.selectbox(
+                "Groq 模型",
+                groq_models,
+                index=groq_models.index(current_model),
+                help="此清單由你的 Groq API Key 即時讀取。",
+            )
+            st.session_state.groq_model = selected_groq_model
+        else:
+            st.text_input(
+                "Groq 模型 ID",
+                key="groq_model",
+                help=(
+                    f"尚未讀取模型清單時使用預設值：{DEFAULT_GROQ_MODEL}。"
+                    "建議先按上方按鈕讀取你的 Key 可用模型。"
+                ),
+            )
+
         st.text_input(
             "Gemini 模型 ID",
             key="gemini_model",
@@ -558,6 +699,12 @@ with st.sidebar:
 
     if st.button("🧪 測試 API 連線"):
         with st.spinner("測試中..."):
+            if (
+                st.session_state.ai_mode == "Groq（免費雲端）"
+                and clean_api_key(st.session_state.groq_key)
+                and not st.session_state.get("groq_models_loaded", False)
+            ):
+                refresh_groq_models()
             test_result = test_current_api()
         if test_result.strip().upper() == "OK":
             st.success("API 連線正常")
@@ -877,5 +1024,6 @@ elif st.session_state.step == 3:
 # ─────────────────────────────────────────────
 st.divider()
 st.caption(
-    "🔐 API Key 不寫入原始碼。建議正式部署時使用環境變數或平台 Secrets 管理。"
+    "🔐 API Key 不寫入原始碼。Groq 模型可依你的 API Key 即時讀取；"
+    "正式部署時建議使用環境變數或平台 Secrets 管理。"
 )
