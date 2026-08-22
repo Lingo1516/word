@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - 題目強化・文獻不卡關版                      ║
-# ║     建議檔名：thesis_external_api_v5.py                        ║
+# ║     論文寫作助手 - 題目生成穩定版                      ║
+# ║     建議檔名：thesis_external_api_v6.py                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
 # 安裝：
@@ -69,6 +69,7 @@ defaults = {
     "economy_mode": True,
     "groq_available_models": [],
     "groq_models_error": "",
+    "last_title_suggestions": "",
 }
 
 for k, v in defaults.items():
@@ -218,6 +219,7 @@ def call_ai(
     prompt: str,
     sys_role: str = "你是嚴謹的學術研究助手。請使用繁體中文回答；不得捏造資料、統計數字或不存在的文獻。",
     max_tokens: int = 4000,
+    fast_mode: bool = False,
 ) -> str:
     ai_mode = st.session_state.ai_mode
 
@@ -231,28 +233,37 @@ def call_ai(
     if not api_key:
         return f"❌ 尚未輸入 {ai_mode.split('（')[0]} API Key，請到左側「API Key」欄位輸入。"
 
-    cache_key = make_cache_key(prompt, sys_role, ai_mode, model_name, max_tokens)
+    cache_model_name = f"{model_name}|fast={fast_mode}"
+    cache_key = make_cache_key(prompt, sys_role, ai_mode, cache_model_name, max_tokens)
     if cache_key in st.session_state.ai_cache:
         return st.session_state.ai_cache[cache_key]
 
     try:
         if ai_mode == "Groq（免費雲端）":
             def do_groq_request():
+                # GPT-OSS 會產生 reasoning；短任務若不限制，可能把免費 TPM
+                # 花在推理而不是最終答案。fast_mode 用於題目、關鍵字等短任務。
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": sys_role},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_completion_tokens": max_tokens,
+                    "temperature": 0.5,
+                }
+
+                if model_name.startswith("openai/gpt-oss"):
+                    payload["include_reasoning"] = False
+                    payload["reasoning_effort"] = "low" if fast_mode else "medium"
+
                 response = requests.post(
                     GROQ_API_URL,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model_name,
-                        "messages": [
-                            {"role": "system", "content": sys_role},
-                            {"role": "user", "content": prompt},
-                        ],
-                        "max_completion_tokens": max_tokens,
-                        "temperature": 0.5,
-                    },
+                    json=payload,
                     timeout=REQUEST_TIMEOUT,
                 )
 
@@ -284,8 +295,9 @@ def call_ai(
                 except (TypeError, ValueError):
                     retry_after = 0
 
-                if 0 < retry_after <= 20:
-                    time.sleep(retry_after + 0.5)
+                max_auto_wait = 3 if fast_mode else 20
+                if 0 < retry_after <= max_auto_wait:
+                    time.sleep(retry_after + 0.25)
                     res = do_groq_request()
 
             if res.status_code == 200:
@@ -451,6 +463,7 @@ def build_literature_queries(title: str, topic: str = ""):
         prompt,
         sys_role="你是學術資料庫檢索專家。只輸出合法 JSON。",
         max_tokens=220,
+        fast_mode=True,
     )
     if result.startswith(("❌", "⚠️")):
         return []
@@ -701,6 +714,40 @@ def format_reference(ref: dict) -> str:
     return text
 
 
+def generate_title_suggestions(topic: str, method: str) -> str:
+    """
+    題目建議使用獨立的輕量呼叫。
+    目的：降低 GPT-OSS reasoning 與輸出 token，避免題目按鈕看似卡住。
+    """
+    prompt = f"""
+研究主題：{topic}
+偏好方法：{method}
+
+請提出 5 個具體、可執行、有研究價值的台灣碩士論文題目。
+不要只寫普通的「A 對 B 之影響」。五題要有明顯差異，且兼顧資料可取得性。
+
+每題只用以下 4 行：
+【1】題目：
+亮點：
+研究對象：
+方法：
+
+依序列出【1】到【5】。
+最後一行再寫：最推薦第 X 題：一句話原因。
+不要寫長篇研究缺口分析，不要展開理論說明。
+"""
+
+    return call_ai(
+        prompt,
+        sys_role=(
+            "你是台灣管理與社會科學碩士論文指導教授。"
+            "題目要有研究價值、可執行、避免空泛與硬塞變項。"
+        ),
+        max_tokens=1100,
+        fast_mode=True,
+    )
+
+
 # ─────────────────────────────────────────────
 # 主介面
 # ─────────────────────────────────────────────
@@ -877,57 +924,32 @@ if st.session_state.step == 0:
         placeholder="人才培訓與教育訓練",
     )
 
-    if st.button("💡 生成題目建議"):
+    st.caption("題目建議採輕量模式，不會啟用長篇 reasoning。")
+
+    if st.button("💡 生成題目建議", type="primary"):
         if not topic.strip():
             st.warning("請先輸入研究主題。")
         else:
-            with st.spinner("AI 生成中..."):
-                method_now = st.session_state.research_method
-                result = call_ai(
-                    f"""
-你是一位熟悉台灣碩士論文審查標準的研究指導教授。
-
-研究主題：{topic}
-偏好研究方法：{method_now}
-
-請先判斷這個主題可能的研究缺口，再提出 5 個真正可執行、具有研究價值，而且不要太普通的碩士論文題目。
-
-出題要求：
-1. 避免只寫成空泛的「A 對 B 之影響研究」。
-2. 題目要有明確研究情境、研究對象或產業範圍。
-3. 變項之間必須有合理理論關係；不要為了看起來厲害而硬塞中介或調節。
-4. 優先找出實務痛點、理論缺口或新情境，而不是只換變項名稱。
-5. 題名要像正式碩士論文，不要像一般報告或企劃案。
-6. 要兼顧資料可取得性、問卷或資料來源可行性，以及研究者在碩士階段能完成。
-7. 若使用者偏好的研究方法不適合某題，可提出較合適的方法並簡短說明。
-8. 五題之間要有明顯差異，不要只是同一句換字。
-
-請依這個格式輸出：
-
-【推薦 1｜整體最值得做】
-題目：
-研究亮點：
-研究對象：
-建議方法：
-為什麼比一般題目好：
-
-【推薦 2｜實務性最高】
-...
-
-【推薦 3｜創新性最高】
-...
-
-【推薦 4｜最容易執行】
-...
-
-【推薦 5｜備選】
-...
-
-最後加一行：
-如果要投稿期刊，我最推薦：第 X 題，原因：……
-"""
+            with st.spinner("正在產生題目建議..."):
+                result = generate_title_suggestions(
+                    topic.strip(),
+                    st.session_state.research_method,
                 )
-            st.write(result)
+
+            if result.startswith("❌"):
+                st.error(result)
+            elif result.startswith("⚠️"):
+                st.warning(result)
+            elif not result.strip():
+                st.error("AI 沒有回傳題目。請先按左側「測試 API 連線」確認模型可用。")
+            else:
+                st.session_state["last_title_suggestions"] = result
+                st.markdown(result)
+
+    # Streamlit 每次點其他按鈕都會 rerun；把上一輪題目保留下來
+    if st.session_state.get("last_title_suggestions"):
+        with st.expander("📌 上一次題目建議", expanded=False):
+            st.markdown(st.session_state["last_title_suggestions"])
 
     title = st.text_input(
         "✅ 確認題目",
