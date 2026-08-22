@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║     論文寫作助手 - 外部 API Key 動態模型版                      ║
-# ║     建議檔名：thesis_external_api_v4.py                        ║
+# ║     論文寫作助手 - 題目強化・文獻不卡關版                      ║
+# ║     建議檔名：thesis_external_api_v5.py                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
 # 安裝：
@@ -53,6 +53,7 @@ REQUEST_TIMEOUT = 90
 defaults = {
     "step": 0,
     "final_title": "",
+    "research_topic": "",
     "refs_list": [],
     "sim_data": None,
     "content": {},
@@ -431,6 +432,61 @@ def fetch_refs_fast(query: str, total: int = 15):
     return []
 
 
+def build_literature_queries(title: str, topic: str = ""):
+    """把中文研究題目轉成適合 Semantic Scholar 的精簡英文檢索詞。"""
+    source_text = topic.strip() or title.strip()
+    prompt = f"""
+研究主題：{source_text}
+論文題目：{title}
+
+請整理成 3 組適合 Semantic Scholar 的英文學術搜尋式。
+要求：
+- 每組 3～6 個核心英文關鍵詞
+- 不要逐字翻譯整個中文標題
+- 涵蓋主要變項、研究對象或情境
+- 只輸出合法 JSON：
+{{"queries":["query 1","query 2","query 3"]}}
+"""
+    result = call_ai(
+        prompt,
+        sys_role="你是學術資料庫檢索專家。只輸出合法 JSON。",
+        max_tokens=220,
+    )
+    if result.startswith(("❌", "⚠️")):
+        return []
+    try:
+        data = extract_json(result)
+        queries = data.get("queries", []) if isinstance(data, dict) else []
+        return [q.strip() for q in queries if isinstance(q, str) and q.strip()][:3]
+    except Exception:
+        return []
+
+
+def fetch_refs_multi(title: str, topic: str = "", total_target: int = 15):
+    """用多組核心關鍵字搜尋真實文獻並去重。"""
+    search_queries = build_literature_queries(title, topic)
+    fallback_query = topic.strip() or title.strip()
+    if fallback_query:
+        search_queries.append(fallback_query)
+    if not search_queries:
+        search_queries = [title]
+
+    refs = []
+    seen = set()
+    for q in search_queries[:4]:
+        results = fetch_refs_fast(q, total=8)
+        for ref in results:
+            key = ((ref.get("doi") or "").lower().strip()
+                   or re.sub(r"\W+", "", (ref.get("title") or "").lower()))
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            refs.append(ref)
+            if len(refs) >= total_target:
+                return refs
+    return refs
+
+
 # ─────────────────────────────────────────────
 # 研究模型
 # ─────────────────────────────────────────────
@@ -566,9 +622,9 @@ def write_chapter_fast(chapter: str, title: str, refs):
     )
 
     if chapter == "第二章 文獻探討" and not refs:
-        return (
-            "⚠️ 尚未取得可驗證文獻，因此不自動撰寫文獻探討。"
-            "請先回到文獻步驟搜尋真實文獻。"
+        refs_text = (
+            "目前尚無可驗證文獻。請建立完整文獻探討架構，"
+            "但所有需要引用之處一律標示【待補文獻】，不得自行杜撰作者或年份。"
         )
 
     prompt = f"""
@@ -826,16 +882,57 @@ if st.session_state.step == 0:
             st.warning("請先輸入研究主題。")
         else:
             with st.spinner("AI 生成中..."):
+                method_now = st.session_state.research_method
                 result = call_ai(
-                    f"請為「{topic}」提出 3 個可操作的碩士論文題目，"
-                    "每題附研究對象、主要變項與約 50 字說明。"
+                    f"""
+你是一位熟悉台灣碩士論文審查標準的研究指導教授。
+
+研究主題：{topic}
+偏好研究方法：{method_now}
+
+請先判斷這個主題可能的研究缺口，再提出 5 個真正可執行、具有研究價值，而且不要太普通的碩士論文題目。
+
+出題要求：
+1. 避免只寫成空泛的「A 對 B 之影響研究」。
+2. 題目要有明確研究情境、研究對象或產業範圍。
+3. 變項之間必須有合理理論關係；不要為了看起來厲害而硬塞中介或調節。
+4. 優先找出實務痛點、理論缺口或新情境，而不是只換變項名稱。
+5. 題名要像正式碩士論文，不要像一般報告或企劃案。
+6. 要兼顧資料可取得性、問卷或資料來源可行性，以及研究者在碩士階段能完成。
+7. 若使用者偏好的研究方法不適合某題，可提出較合適的方法並簡短說明。
+8. 五題之間要有明顯差異，不要只是同一句換字。
+
+請依這個格式輸出：
+
+【推薦 1｜整體最值得做】
+題目：
+研究亮點：
+研究對象：
+建議方法：
+為什麼比一般題目好：
+
+【推薦 2｜實務性最高】
+...
+
+【推薦 3｜創新性最高】
+...
+
+【推薦 4｜最容易執行】
+...
+
+【推薦 5｜備選】
+...
+
+最後加一行：
+如果要投稿期刊，我最推薦：第 X 題，原因：……
+"""
                 )
             st.write(result)
 
     title = st.text_input(
         "✅ 確認題目",
         st.session_state.final_title,
-        placeholder="人才培訓對組織行為之影響研究",
+        placeholder="例如：生成式 AI 使用對員工工作重塑之影響：科技自我效能的調節效果",
     )
 
     if st.button("🚀 開始建立論文草稿", type="primary"):
@@ -849,6 +946,7 @@ if st.session_state.step == 0:
                 st.session_state.content = {}
                 st.session_state.abstract = ""
 
+            st.session_state.research_topic = topic.strip()
             st.session_state.final_title = title.strip()
             st.session_state.step = 1
             st.rerun()
@@ -862,18 +960,22 @@ elif st.session_state.step == 1:
     st.info(f"📌 研究題目：{st.session_state.final_title}")
 
     st.caption(
-        "此版本不再讓 AI 自行「生成」參考文獻，只保留實際搜尋到的資料。"
+        "此版本只收錄資料庫實際搜尋到的文獻；AI 只協助產生檢索關鍵字，不會生成假文獻。"
     )
 
     if st.button("🔍 搜尋真實文獻", type="primary"):
         with st.spinner("搜尋中..."):
-            refs = fetch_refs_fast(st.session_state.final_title, 15)
+            refs = fetch_refs_multi(
+                st.session_state.final_title,
+                st.session_state.research_topic,
+                total_target=15,
+            )
             st.session_state.refs_list = refs
 
         if refs:
             st.success(f"✅ 收集到 {len(refs)} 篇可追溯文獻")
         else:
-            st.warning("目前沒有取得文獻，請稍後再試或調整題目關鍵字。")
+            st.warning("目前沒有取得文獻，但仍可繼續下一步；第二章會以【待補文獻】標示。")
 
     if st.session_state.refs_list:
         df = pd.DataFrame(st.session_state.refs_list)
@@ -897,10 +999,12 @@ elif st.session_state.step == 1:
     with col2:
         if st.button("➡️ 下一步", type="primary"):
             if not st.session_state.refs_list:
-                st.warning("建議先取得真實文獻再進入下一步。")
-            else:
-                st.session_state.step = 2
-                st.rerun()
+                st.info(
+                    "目前尚未找到文獻，仍可繼續。後續文獻探討會標示【待補文獻】，"
+                    "不會自動捏造引用。"
+                )
+            st.session_state.step = 2
+            st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -949,38 +1053,37 @@ elif st.session_state.step == 3:
 
     if st.button("🚀 一鍵生成五章草稿", type="primary"):
         if not st.session_state.refs_list:
-            st.warning("請先回到文獻步驟搜尋真實文獻。")
-        else:
-            generated_count = 0
-            for ch in chapters:
-                if ch not in st.session_state.content:
-                    # Groq 免費方案有每分鐘 token 上限。
-                    # 章節間保留短暫間隔，降低連續請求撞 TPM 的機率。
-                    if (
-                        generated_count > 0
-                        and st.session_state.ai_mode == "Groq（免費雲端）"
-                    ):
-                        time.sleep(3)
+            st.info(
+                "目前沒有可驗證文獻，仍會繼續生成；"
+                "第二章引用位置將標示【待補文獻】。"
+            )
 
-                    with st.spinner(f"正在撰寫 {ch}..."):
-                        result = write_chapter_fast(
-                            ch,
-                            st.session_state.final_title,
-                            st.session_state.refs_list,
-                        )
-                        st.session_state.content[ch] = result
-                        generated_count += 1
+        generated_count = 0
+        for ch in chapters:
+            if ch not in st.session_state.content:
+                if (
+                    generated_count > 0
+                    and st.session_state.ai_mode == "Groq（免費雲端）"
+                ):
+                    time.sleep(3)
 
-                    # 若已撞 rate limit，就停止連打，保留前面完成的章節。
-                    if result.startswith("⚠️ Groq 目前撞到速率限制"):
-                        st.warning(
-                            "已暫停後續章節，避免持續消耗請求。"
-                            "稍後再按一次即可從未完成章節續寫。"
-                        )
-                        break
+                with st.spinner(f"正在撰寫 {ch}..."):
+                    result = write_chapter_fast(
+                        ch,
+                        st.session_state.final_title,
+                        st.session_state.refs_list,
+                    )
+                    st.session_state.content[ch] = result
+                    generated_count += 1
 
-            st.success("✅ 本輪可完成的章節已保存")
-            st.rerun()
+                if result.startswith("⚠️ Groq 目前撞到速率限制"):
+                    st.warning(
+                        "已暫停後續章節，避免持續消耗請求。"
+                        "稍後再按一次即可從未完成章節續寫。"
+                    )
+                    break
+
+        st.success("✅ 本輪可完成的章節已保存")
 
     for ch in chapters:
         with st.expander(
